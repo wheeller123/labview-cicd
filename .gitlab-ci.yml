@@ -1,0 +1,82 @@
+# GitLab CI/CD pipeline for LabVIEW projects
+#
+# Runs on a Windows build server that has LabVIEW 2023 Q3 (64-bit) and
+# VI Package Manager (VIPM) Pro installed. The runner must be registered
+# with the `tams-9344-test-runner` tag and use the `shell` executor
+# (PowerShell). Required CI/CD variable (masked):
+#   VIPM_PRO_LICENSE_KEY  - VIPM Pro license key, applied before any
+#                           VIPC operations so headless installs work.
+
+stages:
+  - dependencies
+  - build
+
+variables:
+  LV_VERSION: "23.0"
+  LV_BITNESS: "64"
+  LV_CLI: 'C:\Program Files\National Instruments\Shared\LabVIEW CLI\LabVIEWCLI.exe'
+  VIPM_CLI: 'C:\Program Files (x86)\JKI\VIPM\vipm.exe'
+  BUILD_OUTPUT_DIR: "Build"
+
+default:
+  tags:
+    - tams-9344-test-runner
+
+# ---------------------------------------------------------------------------
+# Stage 1: install dependencies from any .vipc files committed in the repo.
+# ---------------------------------------------------------------------------
+install-dependencies:
+  stage: dependencies
+  script:
+    - |
+      Write-Host "Activating VIPM Pro license..."
+      & "$env:VIPM_CLI" -licenseKey="$env:VIPM_PRO_LICENSE_KEY" -activateLicense
+      if ($LASTEXITCODE -ne 0) { throw "VIPM license activation failed (exit $LASTEXITCODE)" }
+    - |
+      Write-Host "Searching for .vipc files in repository..."
+      $vipcFiles = Get-ChildItem -Path . -Filter *.vipc -Recurse -File
+      if ($vipcFiles.Count -eq 0) {
+          Write-Host "No .vipc files found - skipping dependency install."
+          exit 0
+      }
+      foreach ($vipc in $vipcFiles) {
+          Write-Host "Applying VIPC: $($vipc.FullName)"
+          & "$env:VIPM_CLI" `
+              -lv-ver=$env:LV_VERSION `
+              -lv-bit=$env:LV_BITNESS `
+              -apply-vipc="$($vipc.FullName)"
+          if ($LASTEXITCODE -ne 0) {
+              throw "VIPM apply-vipc failed for $($vipc.Name) (exit $LASTEXITCODE)"
+          }
+      }
+
+# ---------------------------------------------------------------------------
+# Stage 2: build every build specification in every .lvproj in the repo.
+# LabVIEWCLI MassBuild builds all specs in the given project.
+# ---------------------------------------------------------------------------
+build-all-specs:
+  stage: build
+  script:
+    - |
+      Write-Host "Searching for LabVIEW projects..."
+      $projects = Get-ChildItem -Path . -Filter *.lvproj -Recurse -File
+      if ($projects.Count -eq 0) { throw "No .lvproj files found in repository." }
+
+      New-Item -ItemType Directory -Force -Path $env:BUILD_OUTPUT_DIR | Out-Null
+
+      foreach ($proj in $projects) {
+          Write-Host "MassBuild: $($proj.FullName)"
+          & "$env:LV_CLI" MassBuild `
+              -ProjectPath "$($proj.FullName)" `
+              -LogFilePath "$PWD\$env:BUILD_OUTPUT_DIR\$($proj.BaseName).buildlog" `
+              -LogToConsole true
+          if ($LASTEXITCODE -ne 0) {
+              throw "MassBuild failed for $($proj.Name) (exit $LASTEXITCODE)"
+          }
+      }
+  artifacts:
+    name: "$CI_PROJECT_NAME-$CI_COMMIT_SHORT_SHA"
+    paths:
+      - Build/
+    when: always
+    expire_in: 1 week
