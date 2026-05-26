@@ -14,6 +14,9 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Start Docker
+        run: Start-Service docker
+
       - name: Pull LabVIEW container image
         run: docker pull nationalinstruments/labview:latest-windows
 
