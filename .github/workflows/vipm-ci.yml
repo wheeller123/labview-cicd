@@ -8,10 +8,7 @@ on:
 
 jobs:
   install-packages:
-    runs-on: ubuntu-latest
-
-    container:
-      image: nationalinstruments/labview:latest-windows
+    runs-on: windows-latest
 
     steps:
       - name: Checkout code
@@ -19,7 +16,11 @@ jobs:
 
       - name: Install VIPM
         run: |
-          vipm version
+          $url = "https://packages.jki.net/vipm/preview/vipm_latest_preview_x64.exe"
+          $installer = "$env:TEMP\vipm_installer.exe"
+          Invoke-WebRequest -Uri $url -OutFile $installer
+          Start-Process -FilePath $installer -ArgumentList "/S" -Wait
+          Remove-Item $installer
 
       - name: Activate VIPM
         run: |
