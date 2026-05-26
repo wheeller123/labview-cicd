@@ -14,12 +14,6 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v6
 
-      - name: Switch Docker to Windows containers
-        run: |
-          & "$env:ProgramFiles\Docker\Docker\DockerCli.exe" -SwitchDaemon
-          Start-Sleep -Seconds 20
-          docker info
-
       - name: Build Docker image
         working-directory: Docker
         run: docker build -t vipm-labview-windows-test:latest .
