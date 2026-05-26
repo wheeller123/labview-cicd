@@ -1,0 +1,24 @@
+name: VIPM CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  install-packages:
+    runs-on: windows-latest
+
+    container:
+      image: nationalinstruments/labview:latest-windows
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Check VIPM
+        run: |
+          vipm version
+
+      
