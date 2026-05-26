@@ -1,0 +1,10 @@
+[project]
+labview-version = 2023
+vipc = ""
+
+[nipm]
+
+[vipm]
+
+[vipm.dependencies]
+oglib_array = "6.0.1.20"
