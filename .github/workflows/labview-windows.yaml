@@ -10,15 +10,18 @@ jobs:
   install-packages:
     runs-on: windows-latest
 
-    container:
-      image: nationalinstruments/labview:latest-windows
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Check VIPM
-        run: |
-          vipm version
+      - name: Pull LabVIEW container image
+        run: docker pull nationalinstruments/labview:latest-windows
+
+      - name: Check CLI
+        run: >
+          docker run --rm
+          nationalinstruments/labview:latest-windows
+          LabVIEWCLI -Help -Headless
+
 
       
