@@ -35,11 +35,11 @@ jobs:
       - name: "Install VIPM Dependencies"
         run: |
           echo "Installing VIPM dependencies..."
-          docker run --rm vipm-labview-windows-test:latest powershell -Command "vipm install Source/Simple_Project.dragon"
+          docker run --rm -v "${env:GITHUB_WORKSPACE}:C:\workspace" vipm-labview-windows-test:latest powershell -Command "vipm install C:\workspace\Source\Simple_Project.dragon"
           echo "VIPM dependencies installation completed"
 
       - name: "Compile LabVIEW Project Build Specs"
         run: |
           echo "Compiling LabVIEW project..."
-          docker run --rm vipm-labview-windows-test:latest powershell -Command "LabVIEWCLI compile --project Source/Simple_Project.lvproj --build-spec Simple_Build_Spec"
+          docker run --rm -v "${env:GITHUB_WORKSPACE}:C:\workspace" vipm-labview-windows-test:latest powershell -Command "LabVIEWCLI compile --project C:\workspace\Source\Simple_Project.lvproj --build-spec Simple_Build_Spec"
           echo "LabVIEW project compilation completed"
