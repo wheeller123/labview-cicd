@@ -1,0 +1,46 @@
+stages:
+  - build
+  - verify
+  - activate
+
+variables:
+  IMAGE_NAME: vipm-labview-windows-test:latest
+
+build-image:
+  stage: build
+  tags:
+    - "labview"
+    - "2023"
+  script:
+    - docker build -t $IMAGE_NAME Docker/
+
+verify-vipm:
+  stage: verify
+  tags:
+    - "labview"
+    - "2023"
+  script:
+    - echo "Testing VIPM installation..."
+    - docker run --rm $IMAGE_NAME powershell -Command "vipm help"
+    - echo "VIPM help command executed successfully"
+    - echo "Checking VIPM version..."
+    - docker run --rm $IMAGE_NAME powershell -Command "vipm --version"
+    - echo "VIPM version check completed"
+
+activate-vipm:
+  stage: activate
+  tags:
+    - windows
+    - docker
+  script:
+    - >
+      docker run --rm
+      -e VIPM_SERIAL_NUMBER
+      -e VIPM_FULL_NAME
+      -e VIPM_EMAIL
+      $IMAGE_NAME
+      powershell -Command "vipm activate --serial-number $env:VIPM_SERIAL_NUMBER --name $env:VIPM_FULL_NAME --email $env:VIPM_EMAIL"
+  variables:
+    VIPM_SERIAL_NUMBER: $VIPM_SERIAL_NUMBER
+    VIPM_FULL_NAME: $VIPM_FULL_NAME
+    VIPM_EMAIL: $VIPM_EMAIL

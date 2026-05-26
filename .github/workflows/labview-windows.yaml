@@ -44,3 +44,15 @@ jobs:
           -e VIPM_EMAIL
           vipm-labview-windows-test:latest
           powershell -Command "vipm activate --serial-number $env:VIPM_SERIAL_NUMBER --name $env:VIPM_FULL_NAME --email $env:VIPM_EMAIL"
+
+      - name: "Install VIPM Dependencies"
+        run: |
+          echo "Installing VIPM dependencies..."
+          docker run --rm vipm-labview-windows-test:latest powershell -Command "vipm install Source/Simple_Project.dragon"
+          echo "VIPM dependencies installation completed"
+
+      - name: "Compile LabVIEW Project Build Specs"
+        run: |
+          echo "Compiling LabVIEW project..."
+          docker run --rm vipm-labview-windows-test:latest powershell -Command "LabVIEWCLI compile --project Source/Simple_Project.lvproj --build-spec Simple_Build_Spec"
+          echo "LabVIEW project compilation completed"
