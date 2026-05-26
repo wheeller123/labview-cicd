@@ -25,6 +25,10 @@ jobs:
           docker run --rm
           nationalinstruments/labview:latest-windows
           LabVIEWCLI -Help -Headless
+          
+          docker run --rm
+          nationalinstruments/labview:latest-windows
+          vipm version
 
 
       
