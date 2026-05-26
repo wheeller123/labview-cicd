@@ -37,7 +37,7 @@ jobs:
         run: vipm package-list-refresh
 
       - name: Install project dependencies
-        run: vipm install project.vipc
+        run: vipm install Source/Simple_Project.dragon
 
       - name: List installed packages
         run: vipm list --installed
