@@ -14,8 +14,11 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v6
 
-      - name: Start Docker
-        run: Start-Service docker
+      - name: Switch Docker to Windows containers
+        run: |
+          & "$env:ProgramFiles\Docker\Docker\DockerCli.exe" -SwitchDaemon
+          Start-Sleep -Seconds 20
+          docker info
 
       - name: Build Docker image
         working-directory: Docker
