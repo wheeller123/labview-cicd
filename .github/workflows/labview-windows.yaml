@@ -29,18 +29,18 @@ jobs:
           docker run --rm vipm-labview-windows-test:latest powershell -Command "vipm version"
           echo "VIPM version check completed"
 
-      - name: Activate VIPM
-        env:
-          VIPM_SERIAL_NUMBER: ${{ secrets.VIPM_SERIAL_NUMBER }}
-          VIPM_FULL_NAME: ${{ secrets.VIPM_FULL_NAME }}
-          VIPM_EMAIL: ${{ secrets.VIPM_EMAIL }}
-        run: >
-          docker run --rm
-          -e VIPM_SERIAL_NUMBER
-          -e VIPM_FULL_NAME
-          -e VIPM_EMAIL
-          vipm-labview-windows-test:latest
-          powershell -Command "vipm activate --serial-number $env:VIPM_SERIAL_NUMBER --name $env:VIPM_FULL_NAME --email $env:VIPM_EMAIL"
+      # - name: Activate VIPM
+      #   env:
+      #     VIPM_SERIAL_NUMBER: ${{ secrets.VIPM_SERIAL_NUMBER }}
+      #     VIPM_FULL_NAME: ${{ secrets.VIPM_FULL_NAME }}
+      #     VIPM_EMAIL: ${{ secrets.VIPM_EMAIL }}
+      #   run: >
+      #     docker run --rm
+      #     -e VIPM_SERIAL_NUMBER
+      #     -e VIPM_FULL_NAME
+      #     -e VIPM_EMAIL
+      #     vipm-labview-windows-test:latest
+      #     powershell -Command "vipm activate --serial-number $env:VIPM_SERIAL_NUMBER --name $env:VIPM_FULL_NAME --email $env:VIPM_EMAIL"
 
       - name: "Install VIPM Dependencies"
         run: |
