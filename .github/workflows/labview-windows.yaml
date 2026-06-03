@@ -26,7 +26,7 @@ jobs:
       - name: Verify VIPM version
         run: |
           echo "Checking VIPM version..."
-          docker run --rm vipm-labview-windows-test:latest powershell -Command "vipm --version"
+          docker run --rm vipm-labview-windows-test:latest powershell -Command "vipm version"
           echo "VIPM version check completed"
 
       - name: Activate VIPM

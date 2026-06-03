@@ -13,7 +13,9 @@ RUN $vipmPath = 'C:\Program Files\JKI\VIPM'; \
     [Environment]::SetEnvironmentVariable('PATH', $env:PATH + ';' + $vipmPath, 'Machine')
 
 # Verify VIPM installation
+RUN vipm version
 RUN vipm --version
+
 
 SHELL ["cmd", "/S", "/C"]
 
