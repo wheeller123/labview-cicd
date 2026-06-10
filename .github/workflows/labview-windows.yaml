@@ -26,6 +26,6 @@ jobs:
         shell: pwsh
         run: vipm version
       
-        - name: VIPM refresh
+      - name: VIPM refresh
         shell: pwsh
         run: vipm refresh
