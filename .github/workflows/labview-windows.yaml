@@ -63,3 +63,7 @@ jobs:
       - name: VIPM refresh
         shell: pwsh
         run: vipm refresh
+
+      - name: Install dragon dependencies
+        shell: pwsh
+        run: vipm install "$env:GITHUB_WORKSPACE\Source\Simple_Project.dragon"
