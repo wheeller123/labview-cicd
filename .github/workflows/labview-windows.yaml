@@ -14,23 +14,53 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install VIPM (JKI preview)
+      - name: Download VIPM installer
         shell: pwsh
         run: |
           $ProgressPreference = 'SilentlyContinue'
-          Invoke-WebRequest -Uri "https://packages.jki.net/vipm/preview/vipm-setup-latest-preview.exe" -OutFile "$env:TEMP\vipm-setup.exe"
-          Write-Host "Running VIPM installer..."
-          $log = "$env:TEMP\vipm-install.log"
-          $p = Start-Process -Wait -PassThru -FilePath "$env:TEMP\vipm-setup.exe" -ArgumentList "/exenoui /qn /log `"$log`""
+          $exe = "$env:RUNNER_TEMP\vipm-setup.exe"
+          Invoke-WebRequest -Uri "https://packages.jki.net/vipm/preview/vipm-setup-latest-preview.exe" -OutFile $exe
+          $fi = Get-Item $exe
+          Write-Host "Downloaded $($fi.Length) bytes"
+          $ver = (Get-Item $exe).VersionInfo
+          Write-Host "ProductName : $($ver.ProductName)"
+          Write-Host "FileVersion : $($ver.FileVersion)"
+          Write-Host "ProductVer  : $($ver.ProductVersion)"
+          Write-Host "OriginalName: $($ver.OriginalFilename)"
+
+      - name: Inspect installer bootstrapper
+        shell: pwsh
+        run: |
+          # InstallShield/MSI bundles support /? but suppress output; instead
+          # extract the payload to inspect what setup engine is in use.
+          $exe = "$env:RUNNER_TEMP\vipm-setup.exe"
+          $extract = "$env:RUNNER_TEMP\vipm-extract"
+          New-Item -ItemType Directory -Force -Path $extract | Out-Null
+          Write-Host "Attempting InstallShield extraction (/extract_all)..."
+          $p = Start-Process -Wait -PassThru -FilePath $exe -ArgumentList "/extract_all:`"$extract`""
+          Write-Host "extract_all exit code: $($p.ExitCode)"
+          Get-ChildItem -Path $extract -Recurse -ErrorAction SilentlyContinue |
+            Select-Object -ExpandProperty FullName
+
+      - name: Install VIPM (silent)
+        shell: pwsh
+        run: |
+          $exe = "$env:RUNNER_TEMP\vipm-setup.exe"
+          $log = "$env:RUNNER_TEMP\vipm-install.log"
+          # InstallShield silent: /s for setup.exe, pass MSI options + verbose
+          # log through /v to the embedded msiexec.
+          $args = "/s /v`"/qn /norestart /l*v `"`"$log`"`"`""
+          Write-Host "Running: $exe $args"
+          $p = Start-Process -Wait -PassThru -FilePath $exe -ArgumentList $args
           Write-Host "Installer exit code: $($p.ExitCode)"
-          if (Test-Path $log) {
-            Write-Host "===== VIPM install log ====="
-            Get-Content $log | Select-Object -Last 120
-            Write-Host "===== end install log ====="
-          } else {
-            Write-Host "No install log produced at $log"
+
+          # Surface any MSI logs the bootstrapper may have written.
+          foreach ($candidate in @($log) + (Get-ChildItem "$env:TEMP\*.log","$env:RUNNER_TEMP\*.log" -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName)) {
+            if ($candidate -and (Test-Path $candidate)) {
+              Write-Host "===== LOG: $candidate (last 100 lines) ====="
+              Get-Content $candidate -ErrorAction SilentlyContinue | Select-Object -Last 100
+            }
           }
-          Remove-Item "$env:TEMP\vipm-setup.exe" -Force
           if ($p.ExitCode -ne 0) { throw "VIPM installer failed with exit code $($p.ExitCode)" }
 
       - name: Locate VIPM CLI and add to PATH
