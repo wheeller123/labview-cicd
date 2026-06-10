@@ -9,149 +9,51 @@ on:
 jobs:
   install-packages:
     runs-on: windows-latest
+    timeout-minutes: 45
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Download VIPM installer
+      - name: Install NI Package Manager
+        shell: pwsh
+        run: |
+          $ProgressPreference = 'SilentlyContinue'
+          $exe = "$env:RUNNER_TEMP\NIPackageManager.exe"
+          Invoke-WebRequest -Uri "https://download.ni.com/support/nipkg/products/ni-package-manager/installers/NIPackageManager25.8.0.exe" -OutFile $exe
+          $p = Start-Process -Wait -PassThru -FilePath $exe -ArgumentList "--passive","--accept-eulas","--prevent-reboot"
+          # NI installers: 0 = success, 3010 / -125071 = success but reboot needed.
+          if ($p.ExitCode -notin 0,3010,-125071) { throw "NIPM install failed: $($p.ExitCode)" }
+
+      - name: Install NI LabVIEW 2020 SP1 Runtime (VIPM prerequisite)
+        shell: pwsh
+        run: |
+          $nipkg = "C:\Program Files\National Instruments\NI Package Manager\nipkg.exe"
+          & $nipkg feed-add --name=lvrte2020 "https://download.ni.com/support/nipkg/products/ni-l/ni-labview-2020-runtime-engine/20.1/released"
+          & $nipkg feed-add --name=lvrte2020-critical "https://download.ni.com/support/nipkg/products/ni-l/ni-labview-2020-runtime-engine/20.1/released-critical"
+          & $nipkg update
+          & $nipkg install --accept-eulas --assume-yes ni-labview-2020-runtime-engine
+          # -125071 = reboot needed; packages are installed, a hosted runner cannot reboot.
+          if ($LASTEXITCODE -notin 0,-125071) { throw "nipkg install failed: $LASTEXITCODE" }
+
+      - name: Install VIPM
         shell: pwsh
         run: |
           $ProgressPreference = 'SilentlyContinue'
           $exe = "$env:RUNNER_TEMP\vipm-setup.exe"
           Invoke-WebRequest -Uri "https://packages.jki.net/vipm/preview/vipm-setup-latest-preview.exe" -OutFile $exe
-          $fi = Get-Item $exe
-          Write-Host "Downloaded $($fi.Length) bytes"
-          $ver = (Get-Item $exe).VersionInfo
-          Write-Host "ProductName : $($ver.ProductName)"
-          Write-Host "FileVersion : $($ver.FileVersion)"
-          Write-Host "ProductVer  : $($ver.ProductVersion)"
-          Write-Host "OriginalName: $($ver.OriginalFilename)"
-
-      - name: Install NI LabVIEW Runtime (VIPM prerequisite)
-        shell: pwsh
-        run: |
-          # VIPM's MSI aborts with 1603 because its prerequisite, the
-          # "NI LabVIEW 2020 SP1 64-bit Runtime Engine", is missing on a clean
-          # runner. Install it silently from NI's offline ISO first.
-          $ProgressPreference = 'SilentlyContinue'
-          $iso = "$env:RUNNER_TEMP\ni-lvrte.iso"
-          $url = "https://download.ni.com/support/nipkg/products/ni-l/ni-labview-2020-runtime-engine/20.1/offline/ni-labview-2020-runtime-engine_20.1.0_offline.iso"
-          Write-Host "Downloading NI LabVIEW Runtime offline installer..."
-          Invoke-WebRequest -Uri $url -OutFile $iso
-          Write-Host "Downloaded $((Get-Item $iso).Length) bytes"
-
-          $mount = Mount-DiskImage -ImagePath $iso -PassThru
-          try {
-            $drive = ($mount | Get-Volume).DriveLetter + ":"
-            Write-Host "ISO mounted at $drive"
-            $installer = Get-ChildItem -Path "$drive\" -Filter "Install.exe" -Recurse -ErrorAction SilentlyContinue |
-              Select-Object -First 1
-            if (-not $installer) { throw "Install.exe not found on the NI runtime ISO." }
-            Write-Host "Running NI installer: $($installer.FullName)"
-            # NI's documented full-silent syntax for offline media.
-            $p = Start-Process -Wait -PassThru -FilePath $installer.FullName `
-              -ArgumentList "--passive","--accept-eulas","--prevent-reboot"
-            Write-Host "NI installer exit code: $($p.ExitCode)"
-
-            # Dump NI Package Manager logs to diagnose any non-zero exit.
-            $logDirs = @(
-              "$env:ProgramData\National Instruments\NI Package Manager\logs",
-              "$env:LOCALAPPDATA\Temp\nipkg"
-            )
-            foreach ($d in $logDirs) {
-              if (Test-Path $d) {
-                Get-ChildItem $d -Filter *.log -Recurse -ErrorAction SilentlyContinue |
-                  Sort-Object LastWriteTime | Select-Object -Last 3 | ForEach-Object {
-                    Write-Host "===== NI LOG: $($_.FullName) (last 80 lines) ====="
-                    Get-Content $_.FullName -ErrorAction SilentlyContinue | Select-Object -Last 80
-                  }
-              }
-            }
-            # NI installers use 0 = success, 3010 = success/reboot required.
-            if ($p.ExitCode -notin 0,3010) {
-              throw "NI LabVIEW Runtime install failed with exit code $($p.ExitCode)"
-            }
-          }
-          finally {
-            Dismount-DiskImage -ImagePath $iso | Out-Null
-            Remove-Item $iso -Force -ErrorAction SilentlyContinue
-          }
-
-      - name: Enable global MSI logging
-        shell: pwsh
-        run: |
-          # Make every msiexec invocation write a verbose log to %TEMP%\MSI*.LOG
-          # without passing /v to the bootstrapper (which makes it hang).
-          $key = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\Installer"
-          New-Item -Path $key -Force | Out-Null
-          New-ItemProperty -Path $key -Name "Logging" -Value "voicewarmupx" -PropertyType String -Force | Out-Null
-          New-ItemProperty -Path $key -Name "Debug"   -Value 7 -PropertyType DWord -Force | Out-Null
-          Write-Host "MSI logging policy enabled."
-
-      - name: Install VIPM (silent)
-        shell: pwsh
-        run: |
-          $exe = "$env:RUNNER_TEMP\vipm-setup.exe"
-          # Keep flags minimal: /exenoui /qn is the only combination proven to
-          # run non-interactively to completion. Adding /log or /v"..." makes
-          # the bootstrapper hang on this runner.
-          Write-Host "Running: $exe /exenoui /qn"
+          # /exenoui /qn is the only fully non-interactive invocation; other
+          # flag combinations hang the runner.
           $p = Start-Process -Wait -PassThru -FilePath $exe -ArgumentList "/exenoui","/qn"
-          Write-Host "Installer exit code: $($p.ExitCode)"
-
-          # Dump any MSI/bootstrapper logs Windows wrote automatically.
-          $logs = Get-ChildItem "$env:TEMP\MSI*.LOG","$env:TEMP\*.log","$env:RUNNER_TEMP\*.log" -ErrorAction SilentlyContinue |
-            Sort-Object LastWriteTime | Select-Object -ExpandProperty FullName -Unique
-          if (-not $logs) { Write-Host "No MSI/bootstrapper logs were produced." }
-          foreach ($l in $logs) {
-            Write-Host "===== LOG: $l (last 150 lines) ====="
-            Get-Content $l -ErrorAction SilentlyContinue | Select-Object -Last 150
-            Write-Host "===== end $l ====="
-          }
-          if ($p.ExitCode -ne 0) { throw "VIPM installer failed with exit code $($p.ExitCode)" }
-
-      - name: Locate VIPM CLI and add to PATH
-        shell: pwsh
-        run: |
-          $roots = @(
-            "$env:ProgramFiles\JKI",
-            "${env:ProgramFiles(x86)}\JKI",
-            "$env:ProgramFiles\National Instruments",
-            "${env:ProgramFiles(x86)}\National Instruments"
-          ) | Where-Object { $_ -and (Test-Path $_) }
-
-          Write-Host "Searching for vipm.exe under: $($roots -join ', ')"
-          $hits = @()
-          foreach ($r in $roots) {
-            $hits += Get-ChildItem -Path $r -Filter "vipm*.exe" -Recurse -ErrorAction SilentlyContinue
-          }
-
-          if (-not $hits) {
-            Write-Host "::warning::No vipm*.exe found. Dumping JKI/NI install trees for diagnosis:"
-            foreach ($r in $roots) {
-              Write-Host "=== $r ==="
-              Get-ChildItem -Path $r -Recurse -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName
-            }
-            throw "VIPM CLI (vipm.exe) was not found after installation."
-          }
-
-          $hits | ForEach-Object { Write-Host "Found: $($_.FullName)" }
-          $dir = ($hits | Select-Object -First 1).Directory.FullName
-          Write-Host "Adding to PATH: $dir"
-          Add-Content -Path $env:GITHUB_PATH -Value $dir
+          if ($p.ExitCode -ne 0) { throw "VIPM install failed: $($p.ExitCode)" }
+          Add-Content -Path $env:GITHUB_PATH -Value "C:\Program Files\JKI\VI Package Manager\support"
 
       - name: Seed VIPM Settings.ini
         shell: pwsh
         run: |
-          # A clean install has no Settings.ini, which makes "vipm refresh"
-          # hang waiting on first-launch configuration. Seed the known-good
-          # settings file checked into the repo.
-          $dest = "C:\ProgramData\JKI\VIPM"
-          New-Item -ItemType Directory -Force -Path $dest | Out-Null
-          Copy-Item -Path "$env:GITHUB_WORKSPACE\Docs\Settings.ini" -Destination "$dest\Settings.ini" -Force
-          Write-Host "Seeded $dest\Settings.ini"
-          Get-Item "$dest\Settings.ini" | Select-Object FullName, Length
+          # Without a Settings.ini, "vipm refresh" hangs on first-launch setup.
+          New-Item -ItemType Directory -Force -Path "C:\ProgramData\JKI\VIPM" | Out-Null
+          Copy-Item "$env:GITHUB_WORKSPACE\Docs\Settings.ini" "C:\ProgramData\JKI\VIPM\Settings.ini" -Force
 
       - name: VIPM version
         shell: pwsh
