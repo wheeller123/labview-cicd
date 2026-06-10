@@ -35,6 +35,7 @@ jobs:
           & $nipkg install --accept-eulas --assume-yes ni-labview-2020-runtime-engine
           # -125071 = reboot needed; packages are installed, a hosted runner cannot reboot.
           if ($LASTEXITCODE -notin 0,-125071) { throw "nipkg install failed: $LASTEXITCODE" }
+          exit 0
 
       - name: Install VIPM
         shell: pwsh
