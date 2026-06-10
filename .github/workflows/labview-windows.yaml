@@ -28,6 +28,40 @@ jobs:
           Write-Host "ProductVer  : $($ver.ProductVersion)"
           Write-Host "OriginalName: $($ver.OriginalFilename)"
 
+      - name: Install NI LabVIEW Runtime (VIPM prerequisite)
+        shell: pwsh
+        run: |
+          # VIPM's MSI aborts with 1603 because its prerequisite, the
+          # "NI LabVIEW 2020 SP1 64-bit Runtime Engine", is missing on a clean
+          # runner. Install it silently from NI's offline ISO first.
+          $ProgressPreference = 'SilentlyContinue'
+          $iso = "$env:RUNNER_TEMP\ni-lvrte.iso"
+          $url = "https://download.ni.com/support/nipkg/products/ni-l/ni-labview-2020-runtime-engine/20.1/offline/ni-labview-2020-runtime-engine_20.1.0_offline.iso"
+          Write-Host "Downloading NI LabVIEW Runtime offline installer..."
+          Invoke-WebRequest -Uri $url -OutFile $iso
+          Write-Host "Downloaded $((Get-Item $iso).Length) bytes"
+
+          $mount = Mount-DiskImage -ImagePath $iso -PassThru
+          try {
+            $drive = ($mount | Get-Volume).DriveLetter + ":"
+            Write-Host "ISO mounted at $drive"
+            $installer = Get-ChildItem -Path "$drive\" -Filter "Install.exe" -Recurse -ErrorAction SilentlyContinue |
+              Select-Object -First 1
+            if (-not $installer) { throw "Install.exe not found on the NI runtime ISO." }
+            Write-Host "Running NI installer: $($installer.FullName)"
+            $p = Start-Process -Wait -PassThru -FilePath $installer.FullName `
+              -ArgumentList "--passive","--accept-eulas","--prevent-reboot","--quit-if-no-action"
+            Write-Host "NI installer exit code: $($p.ExitCode)"
+            # NI installers use 0 = success, 3010 = success/reboot required.
+            if ($p.ExitCode -notin 0,3010) {
+              throw "NI LabVIEW Runtime install failed with exit code $($p.ExitCode)"
+            }
+          }
+          finally {
+            Dismount-DiskImage -ImagePath $iso | Out-Null
+            Remove-Item $iso -Force -ErrorAction SilentlyContinue
+          }
+
       - name: Enable global MSI logging
         shell: pwsh
         run: |
