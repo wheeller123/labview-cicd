@@ -20,9 +20,18 @@ jobs:
           $ProgressPreference = 'SilentlyContinue'
           Invoke-WebRequest -Uri "https://packages.jki.net/vipm/preview/vipm-setup-latest-preview.exe" -OutFile "$env:TEMP\vipm-setup.exe"
           Write-Host "Running VIPM installer..."
-          $p = Start-Process -Wait -PassThru -FilePath "$env:TEMP\vipm-setup.exe" -ArgumentList "/exenoui /qn"
+          $log = "$env:TEMP\vipm-install.log"
+          $p = Start-Process -Wait -PassThru -FilePath "$env:TEMP\vipm-setup.exe" -ArgumentList "/exenoui /qn /log `"$log`""
           Write-Host "Installer exit code: $($p.ExitCode)"
+          if (Test-Path $log) {
+            Write-Host "===== VIPM install log ====="
+            Get-Content $log | Select-Object -Last 120
+            Write-Host "===== end install log ====="
+          } else {
+            Write-Host "No install log produced at $log"
+          }
           Remove-Item "$env:TEMP\vipm-setup.exe" -Force
+          if ($p.ExitCode -ne 0) { throw "VIPM installer failed with exit code $($p.ExitCode)" }
 
       - name: Locate VIPM CLI and add to PATH
         shell: pwsh
