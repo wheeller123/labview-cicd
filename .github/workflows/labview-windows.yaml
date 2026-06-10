@@ -37,6 +37,18 @@ jobs:
           if ($LASTEXITCODE -notin 0,-125071) { throw "nipkg install failed: $LASTEXITCODE" }
           exit 0
 
+      - name: Install LabVIEW 2023 (dragon target / build host)
+        shell: pwsh
+        run: |
+          $nipkg = "C:\Program Files\National Instruments\NI Package Manager\nipkg.exe"
+          & $nipkg feed-add --name=lv2023 "https://download.ni.com/support/nipkg/products/ni-l/ni-labview-2023/23.3/released"
+          & $nipkg feed-add --name=lv2023-critical "https://download.ni.com/support/nipkg/products/ni-l/ni-labview-2023/23.3/released-critical"
+          & $nipkg update
+          & $nipkg install --accept-eulas --assume-yes ni-labview-2023-core-en
+          # -125071 = reboot needed; packages are installed, a hosted runner cannot reboot.
+          if ($LASTEXITCODE -notin 0,-125071) { throw "nipkg install failed: $LASTEXITCODE" }
+          exit 0
+
       - name: Install VIPM
         shell: pwsh
         run: |
