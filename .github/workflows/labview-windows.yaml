@@ -28,37 +28,30 @@ jobs:
           Write-Host "ProductVer  : $($ver.ProductVersion)"
           Write-Host "OriginalName: $($ver.OriginalFilename)"
 
-      - name: Inspect installer bootstrapper
-        shell: pwsh
-        run: |
-          # InstallShield/MSI bundles support /? but suppress output; instead
-          # extract the payload to inspect what setup engine is in use.
-          $exe = "$env:RUNNER_TEMP\vipm-setup.exe"
-          $extract = "$env:RUNNER_TEMP\vipm-extract"
-          New-Item -ItemType Directory -Force -Path $extract | Out-Null
-          Write-Host "Attempting InstallShield extraction (/extract_all)..."
-          $p = Start-Process -Wait -PassThru -FilePath $exe -ArgumentList "/extract_all:`"$extract`""
-          Write-Host "extract_all exit code: $($p.ExitCode)"
-          Get-ChildItem -Path $extract -Recurse -ErrorAction SilentlyContinue |
-            Select-Object -ExpandProperty FullName
-
       - name: Install VIPM (silent)
         shell: pwsh
         run: |
           $exe = "$env:RUNNER_TEMP\vipm-setup.exe"
-          $log = "$env:RUNNER_TEMP\vipm-install.log"
-          # InstallShield silent: /s for setup.exe, pass MSI options + verbose
-          # log through /v to the embedded msiexec.
-          $args = "/s /v`"/qn /norestart /l*v `"`"$log`"`"`""
+          # InstallShield bootstrapper: /exenoui hides the bootstrapper UI and
+          # /qn passes full-silent to the embedded msiexec. /log makes the
+          # bootstrapper write its own debug log; /v passes a verbose MSI log.
+          $isLog  = "$env:RUNNER_TEMP\vipm-bootstrap.log"
+          $msiLog = "$env:RUNNER_TEMP\vipm-msi.log"
+          $args = "/exenoui /qn /log `"$isLog`" /v`"/l*v `"`"$msiLog`"`" /norestart`""
           Write-Host "Running: $exe $args"
           $p = Start-Process -Wait -PassThru -FilePath $exe -ArgumentList $args
           Write-Host "Installer exit code: $($p.ExitCode)"
 
-          # Surface any MSI logs the bootstrapper may have written.
-          foreach ($candidate in @($log) + (Get-ChildItem "$env:TEMP\*.log","$env:RUNNER_TEMP\*.log" -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName)) {
-            if ($candidate -and (Test-Path $candidate)) {
-              Write-Host "===== LOG: $candidate (last 100 lines) ====="
-              Get-Content $candidate -ErrorAction SilentlyContinue | Select-Object -Last 100
+          # Surface every log the bootstrapper / MSI may have written so a
+          # non-zero exit code can be diagnosed from the run output.
+          $logs = @($isLog, $msiLog)
+          $logs += Get-ChildItem "$env:TEMP\*.log","$env:RUNNER_TEMP\*.log","$env:TEMP\MSI*.LOG" -ErrorAction SilentlyContinue |
+            Select-Object -ExpandProperty FullName
+          foreach ($l in ($logs | Select-Object -Unique)) {
+            if ($l -and (Test-Path $l)) {
+              Write-Host "===== LOG: $l (last 120 lines) ====="
+              Get-Content $l -ErrorAction SilentlyContinue | Select-Object -Last 120
+              Write-Host "===== end $l ====="
             }
           }
           if ($p.ExitCode -ne 0) { throw "VIPM installer failed with exit code $($p.ExitCode)" }
@@ -92,6 +85,18 @@ jobs:
           $dir = ($hits | Select-Object -First 1).Directory.FullName
           Write-Host "Adding to PATH: $dir"
           Add-Content -Path $env:GITHUB_PATH -Value $dir
+
+      - name: Seed VIPM Settings.ini
+        shell: pwsh
+        run: |
+          # A clean install has no Settings.ini, which makes "vipm refresh"
+          # hang waiting on first-launch configuration. Seed the known-good
+          # settings file checked into the repo.
+          $dest = "C:\ProgramData\JKI\VIPM"
+          New-Item -ItemType Directory -Force -Path $dest | Out-Null
+          Copy-Item -Path "$env:GITHUB_WORKSPACE\Docs\Settings.ini" -Destination "$dest\Settings.ini" -Force
+          Write-Host "Seeded $dest\Settings.ini"
+          Get-Item "$dest\Settings.ini" | Select-Object FullName, Length
 
       - name: VIPM version
         shell: pwsh
