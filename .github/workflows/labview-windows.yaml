@@ -11,45 +11,21 @@ jobs:
     runs-on: windows-latest
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v6
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - name: Build Docker image
-        working-directory: Docker
-        run: docker build -t vipm-labview-windows-test:latest .
-
-      - name: Verify VIPM installation
+      - name: Install VIPM (JKI preview)
+        shell: pwsh
         run: |
-          echo "Testing VIPM installation..."
-          docker run --rm vipm-labview-windows-test:latest powershell -Command "vipm help"
-          echo "VIPM help command executed successfully"
-      - name: Verify VIPM version
-        run: |
-          echo "Checking VIPM version..."
-          docker run --rm vipm-labview-windows-test:latest powershell -Command "vipm --version"
-          echo "VIPM version check completed"
+          $ProgressPreference = 'SilentlyContinue'
+          Invoke-WebRequest -Uri "https://packages.jki.net/vipm/preview/vipm-setup-latest-preview.exe" -OutFile "$env:TEMP\vipm-setup.exe"
+          Start-Process -Wait -FilePath "$env:TEMP\vipm-setup.exe" -ArgumentList "/exenoui /qn"
+          Remove-Item "$env:TEMP\vipm-setup.exe" -Force
 
-      - name: Activate VIPM
-        env:
-          VIPM_SERIAL_NUMBER: ${{ secrets.VIPM_SERIAL_NUMBER }}
-          VIPM_FULL_NAME: ${{ secrets.VIPM_FULL_NAME }}
-          VIPM_EMAIL: ${{ secrets.VIPM_EMAIL }}
-        run: >
-          docker run --rm
-          -e VIPM_SERIAL_NUMBER
-          -e VIPM_FULL_NAME
-          -e VIPM_EMAIL
-          vipm-labview-windows-test:latest
-          powershell -Command "vipm activate --serial-number $env:VIPM_SERIAL_NUMBER --name $env:VIPM_FULL_NAME --email $env:VIPM_EMAIL"
+      - name: VIPM version
+        shell: pwsh
+        run: vipm version
 
-      - name: "Install VIPM Dependencies"
-        run: |
-          echo "Installing VIPM dependencies..."
-          docker run --rm -v "${env:GITHUB_WORKSPACE}:C:\workspace" vipm-labview-windows-test:latest powershell -Command "vipm install C:\workspace\Source\Simple_Project.dragon"
-          echo "VIPM dependencies installation completed"
-
-      - name: "Compile LabVIEW Project Build Specs"
-        run: |
-          echo "Compiling LabVIEW project..."
-          docker run --rm -v "${env:GITHUB_WORKSPACE}:C:\workspace" vipm-labview-windows-test:latest powershell -Command "LabVIEWCLI compile --project C:\workspace\Source\Simple_Project.lvproj --build-spec Simple_Build_Spec"
-          echo "LabVIEW project compilation completed"
+      - name: VIPM refresh
+        shell: pwsh
+        run: vipm refresh
