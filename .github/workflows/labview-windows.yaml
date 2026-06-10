@@ -28,31 +28,36 @@ jobs:
           Write-Host "ProductVer  : $($ver.ProductVersion)"
           Write-Host "OriginalName: $($ver.OriginalFilename)"
 
+      - name: Enable global MSI logging
+        shell: pwsh
+        run: |
+          # Make every msiexec invocation write a verbose log to %TEMP%\MSI*.LOG
+          # without passing /v to the bootstrapper (which makes it hang).
+          $key = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\Installer"
+          New-Item -Path $key -Force | Out-Null
+          New-ItemProperty -Path $key -Name "Logging" -Value "voicewarmupx" -PropertyType String -Force | Out-Null
+          New-ItemProperty -Path $key -Name "Debug"   -Value 7 -PropertyType DWord -Force | Out-Null
+          Write-Host "MSI logging policy enabled."
+
       - name: Install VIPM (silent)
         shell: pwsh
         run: |
           $exe = "$env:RUNNER_TEMP\vipm-setup.exe"
-          # InstallShield bootstrapper: /exenoui hides the bootstrapper UI and
-          # /qn passes full-silent to the embedded msiexec. /log makes the
-          # bootstrapper write its own debug log; /v passes a verbose MSI log.
-          $isLog  = "$env:RUNNER_TEMP\vipm-bootstrap.log"
-          $msiLog = "$env:RUNNER_TEMP\vipm-msi.log"
-          $args = "/exenoui /qn /log `"$isLog`" /v`"/l*v `"`"$msiLog`"`" /norestart`""
-          Write-Host "Running: $exe $args"
-          $p = Start-Process -Wait -PassThru -FilePath $exe -ArgumentList $args
+          # Keep flags minimal: /exenoui /qn is the only combination proven to
+          # run non-interactively to completion. Adding /log or /v"..." makes
+          # the bootstrapper hang on this runner.
+          Write-Host "Running: $exe /exenoui /qn"
+          $p = Start-Process -Wait -PassThru -FilePath $exe -ArgumentList "/exenoui","/qn"
           Write-Host "Installer exit code: $($p.ExitCode)"
 
-          # Surface every log the bootstrapper / MSI may have written so a
-          # non-zero exit code can be diagnosed from the run output.
-          $logs = @($isLog, $msiLog)
-          $logs += Get-ChildItem "$env:TEMP\*.log","$env:RUNNER_TEMP\*.log","$env:TEMP\MSI*.LOG" -ErrorAction SilentlyContinue |
-            Select-Object -ExpandProperty FullName
-          foreach ($l in ($logs | Select-Object -Unique)) {
-            if ($l -and (Test-Path $l)) {
-              Write-Host "===== LOG: $l (last 120 lines) ====="
-              Get-Content $l -ErrorAction SilentlyContinue | Select-Object -Last 120
-              Write-Host "===== end $l ====="
-            }
+          # Dump any MSI/bootstrapper logs Windows wrote automatically.
+          $logs = Get-ChildItem "$env:TEMP\MSI*.LOG","$env:TEMP\*.log","$env:RUNNER_TEMP\*.log" -ErrorAction SilentlyContinue |
+            Sort-Object LastWriteTime | Select-Object -ExpandProperty FullName -Unique
+          if (-not $logs) { Write-Host "No MSI/bootstrapper logs were produced." }
+          foreach ($l in $logs) {
+            Write-Host "===== LOG: $l (last 150 lines) ====="
+            Get-Content $l -ErrorAction SilentlyContinue | Select-Object -Last 150
+            Write-Host "===== end $l ====="
           }
           if ($p.ExitCode -ne 0) { throw "VIPM installer failed with exit code $($p.ExitCode)" }
 
