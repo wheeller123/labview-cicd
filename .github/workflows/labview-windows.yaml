@@ -49,9 +49,25 @@ jobs:
               Select-Object -First 1
             if (-not $installer) { throw "Install.exe not found on the NI runtime ISO." }
             Write-Host "Running NI installer: $($installer.FullName)"
+            # NI's documented full-silent syntax for offline media.
             $p = Start-Process -Wait -PassThru -FilePath $installer.FullName `
-              -ArgumentList "--passive","--accept-eulas","--prevent-reboot","--quit-if-no-action"
+              -ArgumentList "--passive","--accept-eulas","--prevent-reboot"
             Write-Host "NI installer exit code: $($p.ExitCode)"
+
+            # Dump NI Package Manager logs to diagnose any non-zero exit.
+            $logDirs = @(
+              "$env:ProgramData\National Instruments\NI Package Manager\logs",
+              "$env:LOCALAPPDATA\Temp\nipkg"
+            )
+            foreach ($d in $logDirs) {
+              if (Test-Path $d) {
+                Get-ChildItem $d -Filter *.log -Recurse -ErrorAction SilentlyContinue |
+                  Sort-Object LastWriteTime | Select-Object -Last 3 | ForEach-Object {
+                    Write-Host "===== NI LOG: $($_.FullName) (last 80 lines) ====="
+                    Get-Content $_.FullName -ErrorAction SilentlyContinue | Select-Object -Last 80
+                  }
+              }
+            }
             # NI installers use 0 = success, 3010 = success/reboot required.
             if ($p.ExitCode -notin 0,3010) {
               throw "NI LabVIEW Runtime install failed with exit code $($p.ExitCode)"
