@@ -1,0 +1,59 @@
+# GitLab CI/CD equivalent of .github/workflows/labview-windows.yaml.
+#
+# Installs the full VIPM package stack on the `adaptive-win22` runner:
+#   NI Package Manager -> NI LabVIEW 2020 SP1 Runtime -> VIPM -> seed
+#   Settings.ini -> vipm version -> vipm refresh.
+#
+# All steps run in PowerShell (the GitLab Windows shell default), mirroring
+# the `shell: pwsh` steps in the GitHub workflow. GitHub env vars are mapped:
+#   $env:RUNNER_TEMP      -> $env:TEMP
+#   $env:GITHUB_WORKSPACE -> $env:CI_PROJECT_DIR
+#   GITHUB_PATH append    -> prepend to $env:PATH for the rest of the job
+
+stages:
+  - install
+
+install-packages:
+  stage: install
+  tags:
+    - adaptive-win22
+  timeout: 45m
+  script:
+    # Install NI Package Manager
+    - |
+      $ProgressPreference = 'SilentlyContinue'
+      $exe = "$env:TEMP\NIPackageManager.exe"
+      Invoke-WebRequest -Uri "https://download.ni.com/support/nipkg/products/ni-package-manager/installers/NIPackageManager25.8.0.exe" -OutFile $exe
+      $p = Start-Process -Wait -PassThru -FilePath $exe -ArgumentList "--passive","--accept-eulas","--prevent-reboot"
+      # NI installers: 0 = success, 3010 / -125071 = success but reboot needed.
+      if ($p.ExitCode -notin 0,3010,-125071) { throw "NIPM install failed: $($p.ExitCode)" }
+    # Install NI LabVIEW 2020 SP1 Runtime (VIPM prerequisite)
+    - |
+      $nipkg = "C:\Program Files\National Instruments\NI Package Manager\nipkg.exe"
+      & $nipkg feed-add --name=lvrte2020 "https://download.ni.com/support/nipkg/products/ni-l/ni-labview-2020-runtime-engine/20.1/released"
+      & $nipkg feed-add --name=lvrte2020-critical "https://download.ni.com/support/nipkg/products/ni-l/ni-labview-2020-runtime-engine/20.1/released-critical"
+      & $nipkg update
+      & $nipkg install --accept-eulas --assume-yes ni-labview-2020-runtime-engine
+      # -125071 = reboot needed; packages are installed, runner cannot reboot.
+      if ($LASTEXITCODE -notin 0,-125071) { throw "nipkg install failed: $LASTEXITCODE" }
+    # Install VIPM
+    - |
+      $ProgressPreference = 'SilentlyContinue'
+      $exe = "$env:TEMP\vipm-setup.exe"
+      Invoke-WebRequest -Uri "https://packages.jki.net/vipm/preview/vipm-setup-latest-preview.exe" -OutFile $exe
+      # /exenoui /qn is the only fully non-interactive invocation; other
+      # flag combinations hang the runner.
+      $p = Start-Process -Wait -PassThru -FilePath $exe -ArgumentList "/exenoui","/qn"
+      if ($p.ExitCode -ne 0) { throw "VIPM install failed: $($p.ExitCode)" }
+      $env:PATH = "C:\Program Files\JKI\VI Package Manager\support;$env:PATH"
+    # Seed VIPM Settings.ini
+    - |
+      # Without a Settings.ini, "vipm refresh" hangs on first-launch setup.
+      New-Item -ItemType Directory -Force -Path "C:\ProgramData\JKI\VIPM" | Out-Null
+      Copy-Item "$env:CI_PROJECT_DIR\Docs\Settings.ini" "C:\ProgramData\JKI\VIPM\Settings.ini" -Force
+    # VIPM version
+    - |
+      & "C:\Program Files\JKI\VI Package Manager\support\vipm.exe" version
+    # VIPM refresh
+    - |
+      & "C:\Program Files\JKI\VI Package Manager\support\vipm.exe" refresh
