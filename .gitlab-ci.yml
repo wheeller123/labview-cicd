@@ -21,7 +21,8 @@ variables:
   PROJECT: "Source\\Simple_Project.lvproj"
   DRAGON: "Source\\Simple_Project.dragon"
   BUILD_SPEC: "test_build"
-  LV_VERSION: "23.3"
+  LV_VERSION: "23.3"        # LabVIEWCLI -LabVIEWVersion form
+  LV_YEAR: "2023"          # vipm --labview-version form (4-digit year)
   LV_BITNESS: "64"
   VIPM_EXE: "C:\\Program Files\\JKI\\VI Package Manager\\support\\vipm.exe"
   NIPKG: "C:\\Program Files\\National Instruments\\NI Package Manager\\nipkg.exe"
@@ -160,13 +161,23 @@ labview-build:
       Set-Content -Path $ini -Value $tokens
       Write-Host "  Wrote $ini"
       Get-Content $ini | Write-Host
+    # Refresh VIPM so it discovers the now-installed LabVIEW 2023 target
+    - |
+      Write-Host "Refreshing VIPM to register the LabVIEW 2023 target..."
+      # The earlier refresh ran before LabVIEW 2023 existed, so VIPM had no
+      # targets ("Available targets: <none>"). Refresh again now that LabVIEW
+      # is installed, then confirm 2023 is a known target.
+      & "$env:VIPM_EXE" refresh
+      Write-Host "  LabVIEW installations discovered by VIPM:"
+      & "$env:VIPM_EXE" labview list; cmd /c "exit 0"
     # Install dragon dependencies via VIPM
     - |
       Write-Host "Installing dragon dependencies via VIPM..."
       Write-Host "  vipm install $env:CI_PROJECT_DIR\$env:DRAGON"
-      # The .dragon file pins the package set; VIPM resolves the LabVIEW target
-      # automatically from it.
-      & "$env:VIPM_EXE" install "$env:CI_PROJECT_DIR\$env:DRAGON"
+      # Pin the target explicitly: VIPM's auto-resolution from the .dragon file
+      # failed with "LabVIEW version '2023' not found / Available targets:
+      # <none>" on a fresh install. --labview-version takes a 4-digit year.
+      & "$env:VIPM_EXE" --labview-version $env:LV_YEAR --labview-bitness $env:LV_BITNESS install "$env:CI_PROJECT_DIR\$env:DRAGON"
       if ($LASTEXITCODE -ne 0) { throw "vipm install failed: $LASTEXITCODE" }
       Write-Host "  Dragon dependencies installed."
     # Build the LabVIEW project build spec
