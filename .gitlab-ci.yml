@@ -128,6 +128,27 @@ install-packages:
       if ($LASTEXITCODE -notin 0,-125071) { throw "LabVIEW 2023 install failed: $LASTEXITCODE" }
       Write-Host "  LabVIEW 2023 Q3 installed (nipkg exit $LASTEXITCODE)."
       cmd /c "exit 0"
+    # Configure LabVIEW.ini for headless VI Server access (used by VIPM/LabVIEWCLI)
+    - |
+      Write-Host "Writing LabVIEW.ini VI Server settings..."
+      $ini = "C:\Program Files\National Instruments\LabVIEW 2023\LabVIEW.ini"
+      # Tokens must sit under the [LabVIEW] section header; a fresh install has
+      # no LabVIEW.ini, so create it with the header.
+      $tokens = @(
+        "[LabVIEW]",
+        "server.tcp.enabled=True",
+        "server.tcp.port=3363",
+        'server.tcp.access="+*"',
+        'server.vi.access="+*"',
+        "server.app.propertiesEnabled=True",
+        "server.vi.propertiesEnabled=True",
+        "server.vi.callsEnabled=True",
+        "ShowWelcomeOnLaunch=False",
+        "neverShowAddonActivationDialog=True"
+      )
+      Set-Content -Path $ini -Value $tokens
+      Write-Host "  Wrote $ini"
+      Get-Content $ini | Write-Host
 
 install-dependencies:
   stage: dependencies
