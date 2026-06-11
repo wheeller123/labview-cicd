@@ -70,7 +70,9 @@ jobs:
           # Raise the LabVIEW connection timeout while copying: 120s is too
           # tight for a cold first launch on a fresh runner.
           New-Item -ItemType Directory -Force -Path "C:\ProgramData\JKI\VIPM" | Out-Null
-          (Get-Content "$env:GITHUB_WORKSPACE\Docs\Settings.ini") -replace 'Connection Timeout="120"','Connection Timeout="600"' |
+          (Get-Content "$env:GITHUB_WORKSPACE\Docs\Settings.ini") `
+            -replace 'Connection Timeout="120"','Connection Timeout="600"' `
+            -replace 'Mass Compile After Package Install\?="TRUE"','Mass Compile After Package Install?="FALSE"' |
             Set-Content "C:\ProgramData\JKI\VIPM\Settings.ini"
 
       - name: VIPM version
@@ -222,7 +224,7 @@ jobs:
       - name: Install dragon dependencies
         shell: pwsh
         env:
-          VIPM_TIMEOUT: "600"
+          VIPM_TIMEOUT: "1800"
         run: |
           # Run the install in the background and poll window titles so the
           # log reveals any dialog LabVIEW is blocking on.
@@ -272,9 +274,9 @@ jobs:
             }
           }
           '@
-          $deadline = (Get-Date).AddMinutes(12)
+          $deadline = (Get-Date).AddMinutes(32)
           while ((Get-Date) -lt $deadline -and $job.State -eq 'Running') {
-            Start-Sleep -Seconds 45
+            Start-Sleep -Seconds 60
             Write-Host "--- $(Get-Date -Format HH:mm:ss) all top-level windows (pid: title) ---"
             [WinEnum]::All() | ForEach-Object { Write-Host $_ }
             Write-Host "--- children of 'LabVIEW' window ---"
