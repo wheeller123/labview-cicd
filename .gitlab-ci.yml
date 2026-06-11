@@ -36,6 +36,9 @@ install-packages:
       & $nipkg install --accept-eulas --assume-yes ni-labview-2020-runtime-engine
       # -125071 = reboot needed; packages are installed, runner cannot reboot.
       if ($LASTEXITCODE -notin 0,-125071) { throw "nipkg install failed: $LASTEXITCODE" }
+      # GitLab re-raises the last native exit code at the end of the block, so
+      # clear it (the nipkg -125071 is benign here) before the step ends.
+      exit 0
     # Install VIPM
     - |
       $ProgressPreference = 'SilentlyContinue'
