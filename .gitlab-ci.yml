@@ -1,46 +1,50 @@
+# GitLab CI/CD for the LabVIEW project.
+#
+# Assumes the `adaptive-win32` runner already has LabVIEW 2023 (64-bit) and
+# VIPM installed and LICENSED. The pipeline therefore only:
+#   1. refreshes VIPM and installs the project's .dragon dependencies, then
+#   2. compiles the LabVIEW project build spec(s).
+#
+# PowerShell is used for every step to match the GitHub Actions workflow.
+
 stages:
+  - dependencies
   - build
-  - verify
-  - activate
 
 variables:
-  IMAGE_NAME: vipm-labview-windows-test:latest
+  PROJECT: "Source\\Simple_Project.lvproj"
+  DRAGON: "Source\\Simple_Project.dragon"
+  BUILD_SPEC: "test_build"
+  LV_VERSION: "23.3"
+  LV_BITNESS: "64"
+  # Give VIPM/LabVIEW generous time for the first cold connection.
+  VIPM_TIMEOUT: "1800"
 
-build-image:
+default:
+  tags:
+    - adaptive-win32
+
+install-dependencies:
+  stage: dependencies
+  script:
+    - powershell -NoProfile -Command "vipm refresh"
+    # The .dragon file pins the package set; vipm resolves the LabVIEW target
+    # automatically from it.
+    - powershell -NoProfile -Command "vipm install \"$env:CI_PROJECT_DIR\$env:DRAGON\""
+
+compile-build-spec:
   stage: build
-  tags:
-    - "labview"
-    - "2023"
   script:
-    - docker build -t $IMAGE_NAME Docker/
-
-verify-vipm:
-  stage: verify
-  tags:
-    - "labview"
-    - "2023"
-  script:
-    - echo "Testing VIPM installation..."
-    - docker run --rm $IMAGE_NAME powershell -Command "vipm help"
-    - echo "VIPM help command executed successfully"
-    - echo "Checking VIPM version..."
-    - docker run --rm $IMAGE_NAME powershell -Command "vipm --version"
-    - echo "VIPM version check completed"
-
-activate-vipm:
-  stage: activate
-  tags:
-    - windows
-    - docker
-  script:
+    # LabVIEWCLI drives the licensed LabVIEW to build the EXE build spec.
     - >
-      docker run --rm
-      -e VIPM_SERIAL_NUMBER
-      -e VIPM_FULL_NAME
-      -e VIPM_EMAIL
-      $IMAGE_NAME
-      powershell -Command "vipm activate --serial-number $env:VIPM_SERIAL_NUMBER --name $env:VIPM_FULL_NAME --email $env:VIPM_EMAIL"
-  variables:
-    VIPM_SERIAL_NUMBER: $VIPM_SERIAL_NUMBER
-    VIPM_FULL_NAME: $VIPM_FULL_NAME
-    VIPM_EMAIL: $VIPM_EMAIL
+      powershell -NoProfile -Command
+      "LabVIEWCLI -OperationName ExecuteBuildSpec
+      -ProjectPath \"$env:CI_PROJECT_DIR\$env:PROJECT\"
+      -BuildSpecName \"$env:BUILD_SPEC\"
+      -LabVIEWVersion $env:LV_VERSION -LabVIEWBitness $env:LV_BITNESS"
+  artifacts:
+    name: "$BUILD_SPEC-$CI_COMMIT_SHORT_SHA"
+    paths:
+      - "Source/Build/"
+    when: on_success
+    expire_in: 1 week
