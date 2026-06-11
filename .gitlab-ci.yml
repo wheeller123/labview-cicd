@@ -126,9 +126,18 @@ labview-build:
       & "$env:NIPKG" update
       Write-Host "  Installing ni-labview-2023-core-en (64-bit)..."
       & "$env:NIPKG" install --accept-eulas --assume-yes ni-labview-2023-core-en
-      # -125071 = reboot needed; packages are installed, runner cannot reboot.
-      if ($LASTEXITCODE -notin 0,-125071) { throw "LabVIEW 2023 install failed: $LASTEXITCODE" }
-      Write-Host "  LabVIEW 2023 Q3 installed (nipkg exit $LASTEXITCODE)."
+      $code = $LASTEXITCODE
+      Write-Host "  nipkg install exit code: $code"
+      # Tolerated non-fatal codes:
+      #   -125071 = reboot needed (packages installed, runner cannot reboot)
+      #   -125083 = a sub-package custom action failed (e.g. the offline help
+      #             viewer's netsh firewall rule -125441); LabVIEW core itself
+      #             still installs, so verify LabVIEW.exe rather than trust the
+      #             aggregate exit code.
+      $lvExe = "C:\Program Files\National Instruments\LabVIEW 2023\LabVIEW.exe"
+      if ($code -notin 0,-125071,-125083) { throw "LabVIEW 2023 install failed: $code" }
+      if (-not (Test-Path $lvExe)) { throw "LabVIEW.exe not found after install (exit $code)" }
+      Write-Host "  LabVIEW 2023 Q3 verified at $lvExe (nipkg exit $code)."
       cmd /c "exit 0"
     # Configure LabVIEW.ini for headless VI Server access (used by VIPM/LabVIEWCLI)
     - |
