@@ -1,13 +1,15 @@
 # GitLab CI/CD for the LabVIEW project.
 #
-# Assumes the `adaptive-win32` runner already has LabVIEW 2023 (64-bit) and
-# VIPM installed and LICENSED. The pipeline therefore only:
-#   1. refreshes VIPM and installs the project's .dragon dependencies, then
-#   2. compiles the LabVIEW project build spec(s).
+# Assumes the `adaptive-win32` runner already has LabVIEW 2023 (64-bit)
+# installed and LICENSED, but NOT VIPM. The pipeline therefore:
+#   1. installs VIPM (NI Package Manager + VIPM) and seeds its settings,
+#   2. refreshes VIPM and installs the project's .dragon dependencies, then
+#   3. compiles the LabVIEW project build spec(s).
 #
 # PowerShell is used for every step to match the GitHub Actions workflow.
 
 stages:
+  - install
   - dependencies
   - build
 
@@ -17,6 +19,7 @@ variables:
   BUILD_SPEC: "test_build"
   LV_VERSION: "23.3"
   LV_BITNESS: "64"
+  VIPM_BIN: "C:\\Program Files\\JKI\\VI Package Manager\\support"
   # Give VIPM/LabVIEW generous time for the first cold connection.
   VIPM_TIMEOUT: "1800"
 
@@ -24,13 +27,39 @@ default:
   tags:
     - adaptive-win32
 
+install-vipm:
+  stage: install
+  script:
+    # NI Package Manager is VIPM's installer prerequisite (LabVIEW itself is
+    # already present, so the LabVIEW runtime feed is not needed here).
+    - >
+      powershell -NoProfile -Command
+      "$ProgressPreference='SilentlyContinue';
+      $exe=\"$env:RUNNER_TEMP\NIPackageManager.exe\";
+      Invoke-WebRequest -Uri 'https://download.ni.com/support/nipkg/products/ni-package-manager/installers/NIPackageManager25.8.0.exe' -OutFile $exe;
+      $p=Start-Process -Wait -PassThru -FilePath $exe -ArgumentList '--passive','--accept-eulas','--prevent-reboot';
+      if ($p.ExitCode -notin 0,3010,-125071) { throw \"NIPM install failed: $($p.ExitCode)\" }"
+    # Install VIPM. /exenoui /qn is the only fully non-interactive invocation.
+    - >
+      powershell -NoProfile -Command
+      "$ProgressPreference='SilentlyContinue';
+      $exe=\"$env:RUNNER_TEMP\vipm-setup.exe\";
+      Invoke-WebRequest -Uri 'https://packages.jki.net/vipm/preview/vipm-setup-latest-preview.exe' -OutFile $exe;
+      $p=Start-Process -Wait -PassThru -FilePath $exe -ArgumentList '/exenoui','/qn';
+      if ($p.ExitCode -ne 0) { throw \"VIPM install failed: $($p.ExitCode)\" }"
+    # Seed Settings.ini so 'vipm refresh' does not hang on first-launch setup.
+    - >
+      powershell -NoProfile -Command
+      "New-Item -ItemType Directory -Force -Path 'C:\ProgramData\JKI\VIPM' | Out-Null;
+      Copy-Item \"$env:CI_PROJECT_DIR\Docs\Settings.ini\" 'C:\ProgramData\JKI\VIPM\Settings.ini' -Force"
+
 install-dependencies:
   stage: dependencies
   script:
-    - powershell -NoProfile -Command "vipm refresh"
+    - powershell -NoProfile -Command "& \"$env:VIPM_BIN\vipm.exe\" refresh"
     # The .dragon file pins the package set; vipm resolves the LabVIEW target
     # automatically from it.
-    - powershell -NoProfile -Command "vipm install \"$env:CI_PROJECT_DIR\$env:DRAGON\""
+    - powershell -NoProfile -Command "& \"$env:VIPM_BIN\vipm.exe\" install \"$env:CI_PROJECT_DIR\$env:DRAGON\""
 
 compile-build-spec:
   stage: build
