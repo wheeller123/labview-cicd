@@ -9,7 +9,7 @@
       2. Install the NI LabVIEW 2020 SP1 64-bit Runtime (VIPM's prerequisite)
          via nipkg.
       3. Install VIPM silently (/exenoui /qn).
-      4. Seed Settings.ini (from Docs\Settings.ini next to this script).
+      4. Seed Settings.ini (staged from Downloads via C:\Scripts).
       5. vipm version.
       6. vipm refresh.
 
@@ -19,9 +19,7 @@
 [CmdletBinding()]
 param(
     # Where downloaded installers are staged.
-    [string]$TempDir = $env:TEMP,
-    # Repo root containing Docs\Settings.ini (defaults to this script's folder).
-    [string]$RepoDir = $PSScriptRoot
+    [string]$TempDir = $env:TEMP
 )
 
 $ErrorActionPreference = 'Stop'
@@ -62,8 +60,10 @@ $env:PATH = "$vipmBin;$env:PATH"
 # 4. Seed VIPM Settings.ini ----------------------------------------------------
 # Without a Settings.ini, "vipm refresh" hangs on first-launch setup.
 Write-Output 'Seeding VIPM Settings.ini...'
+New-Item -ItemType Directory -Force -Path "C:\Scripts" | Out-Null
+Copy-Item -Path "$env:USERPROFILE\Downloads\Settings.ini" -Destination "C:\Scripts\Settings.ini" -Force
 New-Item -ItemType Directory -Force -Path "C:\ProgramData\JKI\VIPM" | Out-Null
-Copy-Item "$RepoDir\Docs\Settings.ini" "C:\ProgramData\JKI\VIPM\Settings.ini" -Force
+Copy-Item -Path "C:\Scripts\Settings.ini" -Destination "C:\ProgramData\JKI\VIPM\Settings.ini" -Force
 
 # 5. VIPM version --------------------------------------------------------------
 & $vipmExe version
