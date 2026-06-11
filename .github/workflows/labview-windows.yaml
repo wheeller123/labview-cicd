@@ -96,5 +96,26 @@ jobs:
       - name: Install dragon dependencies
         shell: pwsh
         env:
-          VIPM_TIMEOUT: "1800"
-        run: vipm install "$env:GITHUB_WORKSPACE\Source\Simple_Project.dragon"
+          VIPM_TIMEOUT: "600"
+        run: |
+          # Run the install in the background and poll window titles so the
+          # log reveals any dialog LabVIEW is blocking on.
+          $job = Start-Job -ScriptBlock {
+            vipm install "$using:env:GITHUB_WORKSPACE\Source\Simple_Project.dragon" 2>&1
+            $LASTEXITCODE
+          }
+          $deadline = (Get-Date).AddMinutes(12)
+          while ((Get-Date) -lt $deadline -and $job.State -eq 'Running') {
+            Start-Sleep -Seconds 45
+            Write-Host "--- $(Get-Date -Format HH:mm:ss) window titles ---"
+            Get-Process | Where-Object { $_.MainWindowTitle } |
+              Select-Object ProcessName, MainWindowTitle | Format-Table -AutoSize | Out-String | Write-Host
+            Write-Host "--- LabVIEW/VIPM processes ---"
+            Get-Process -Name "LabVIEW","vipm","VIPM*" -ErrorAction SilentlyContinue |
+              Select-Object ProcessName, Id, CPU | Format-Table -AutoSize | Out-String | Write-Host
+          }
+          $out = Receive-Job $job -Wait
+          $code = $out | Select-Object -Last 1
+          $out | Select-Object -SkipLast 1 | Write-Host
+          Write-Host "vipm install exit code: $code"
+          if ($code -ne 0) { throw "vipm install failed/timed out (code $code)" }
