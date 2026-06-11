@@ -76,6 +76,25 @@ jobs:
         shell: pwsh
         run: vipm refresh
 
+      - name: Configure LabVIEW for headless VI Server access
+        shell: pwsh
+        run: |
+          # VIPM installs packages by driving LabVIEW over VI Server. On a
+          # fresh machine LabVIEW's first launch blocks on welcome/licensing
+          # dialogs, so enable VI Server and suppress startup UI up front.
+          $ini = "C:\Program Files\National Instruments\LabVIEW 2023\LabVIEW.ini"
+          Add-Content -Path $ini -Value @(
+            "server.tcp.enabled=True",
+            "server.tcp.port=3363",
+            "server.tcp.access=+*",
+            "server.vi.access=+*",
+            "ShowWelcomeOnLaunch=False",
+            "neverShowAddonActivationDialog=True"
+          )
+          Get-Content $ini
+
       - name: Install dragon dependencies
         shell: pwsh
+        env:
+          VIPM_TIMEOUT: "1800"
         run: vipm install "$env:GITHUB_WORKSPACE\Source\Simple_Project.dragon"
