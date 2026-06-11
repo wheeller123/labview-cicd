@@ -23,27 +23,19 @@ param(
 $ErrorActionPreference = 'Stop'
 $ProgressPreference    = 'SilentlyContinue'
 
-$NipmUrl = 'https://download.ni.com/support/nipkg/products/ni-package-manager/installers/NIPackageManager25.8.0.exe'
 $VipmUrl = 'https://packages.jki.net/vipm/preview/vipm-setup-latest-preview.exe'
 
-# 1. NI Package Manager --------------------------------------------------------
-Write-Output 'Installing NI Package Manager...'
-$nipm = Join-Path $TempDir 'NIPackageManager.exe'
-Invoke-WebRequest -Uri $NipmUrl -OutFile $nipm
-$p = Start-Process -Wait -PassThru -FilePath $nipm -ArgumentList '--passive', '--accept-eulas', '--prevent-reboot'
-# NI installers: 0 = success, 3010 / -125071 = success but reboot needed.
-if ($p.ExitCode -notin 0, 3010, -125071) { throw "NIPM install failed: $($p.ExitCode)" }
-
-# 2. VIPM ----------------------------------------------------------------------
 Write-Output 'Installing VIPM...'
 $vipm = Join-Path $TempDir 'vipm-setup.exe'
 Invoke-WebRequest -Uri $VipmUrl -OutFile $vipm
 $p = Start-Process -Wait -PassThru -FilePath $vipm -ArgumentList '/exenoui', '/qn'
 if ($p.ExitCode -ne 0) { throw "VIPM install failed: $($p.ExitCode)" }
 
-# 3. Seed Settings.ini ---------------------------------------------------------
 Write-Output "Moving setting.ini file"
 Move-Item -Path "C:\Scripts\Settings.ini" -Destination "C:\ProgramData\JKI\VIPM"
 icacls "C:\ProgramData\JKI\VIPM\Settings.ini" /grant "Everyone:(F)"
+
+Write-Output 'Refreshing VIPM...'
+& "C:\Program Files\JKI\VI Package Manager\support\vipm.exe" refresh
 
 Write-Output 'VIPM install complete.'
