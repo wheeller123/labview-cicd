@@ -44,7 +44,9 @@ jobs:
           & $nipkg feed-add --name=lv2023 "https://download.ni.com/support/nipkg/products/ni-l/ni-labview-2023/23.3/released"
           & $nipkg feed-add --name=lv2023-critical "https://download.ni.com/support/nipkg/products/ni-l/ni-labview-2023/23.3/released-critical"
           & $nipkg update
-          & $nipkg install --accept-eulas --assume-yes ni-labview-2023-core-en
+          # deployable-license licenses LabVIEW non-interactively; without it
+          # LabVIEW parks on its activation dialog and VI Server never starts.
+          & $nipkg install --accept-eulas --assume-yes ni-labview-2023-core-en ni-labview-2023-deployable-license
           # -125071 = reboot needed; packages are installed, a hosted runner cannot reboot.
           if ($LASTEXITCODE -notin 0,-125071) { throw "nipkg install failed: $LASTEXITCODE" }
           exit 0
