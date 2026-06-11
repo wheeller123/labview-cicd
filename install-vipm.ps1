@@ -16,8 +16,6 @@
 
 [CmdletBinding()]
 param(
-    # Source of the known-good VIPM Settings.ini to seed.
-    [string]$SettingsSource = "C:\Scripts\Settings.ini",
     # Where downloaded installers are staged.
     [string]$TempDir = $env:TEMP
 )
@@ -27,7 +25,6 @@ $ProgressPreference    = 'SilentlyContinue'
 
 $NipmUrl = 'https://download.ni.com/support/nipkg/products/ni-package-manager/installers/NIPackageManager25.8.0.exe'
 $VipmUrl = 'https://packages.jki.net/vipm/preview/vipm-setup-latest-preview.exe'
-$VipmSettingsDir = 'C:\ProgramData\JKI\VIPM'
 
 # 1. NI Package Manager --------------------------------------------------------
 Write-Output 'Installing NI Package Manager...'
@@ -45,9 +42,8 @@ $p = Start-Process -Wait -PassThru -FilePath $vipm -ArgumentList '/exenoui', '/q
 if ($p.ExitCode -ne 0) { throw "VIPM install failed: $($p.ExitCode)" }
 
 # 3. Seed Settings.ini ---------------------------------------------------------
-Write-Output 'Moving Settings.ini file...'
-New-Item -ItemType Directory -Force -Path $VipmSettingsDir | Out-Null
-Move-Item -Path $SettingsSource -Destination $VipmSettingsDir -Force
-icacls "$VipmSettingsDir\Settings.ini" /grant "Everyone:(F)"
+Write-Output "Moving setting.ini file"
+Move-Item -Path "C:\Scripts\Settings.ini" -Destination "C:\ProgramData\JKI\VIPM"
+icacls "C:\ProgramData\JKI\VIPM\Settings.ini" /grant "Everyone:(F)"
 
 Write-Output 'VIPM install complete.'
