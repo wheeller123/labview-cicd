@@ -96,15 +96,64 @@ jobs:
             Write-Host "--- LabVIEW.ini ---"
             Get-Content $ini | Write-Host
           }
+          Add-Type @'
+          using System;
+          using System.Collections.Generic;
+          using System.Runtime.InteropServices;
+          using System.Text;
+          public class WinEnum {
+            [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc cb, IntPtr lp);
+            [DllImport("user32.dll")] static extern bool EnumChildWindows(IntPtr p, EnumProc cb, IntPtr lp);
+            [DllImport("user32.dll")] static extern int GetWindowText(IntPtr h, StringBuilder s, int n);
+            [DllImport("user32.dll")] static extern int GetClassName(IntPtr h, StringBuilder s, int n);
+            [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+            [DllImport("user32.dll", CharSet=CharSet.Auto)] static extern IntPtr SendMessage(IntPtr h, uint m, IntPtr w, StringBuilder l);
+            delegate bool EnumProc(IntPtr h, IntPtr lp);
+            public static List<string> Dump(uint targetPid) {
+              var r = new List<string>();
+              EnumWindows((h, lp) => {
+                uint pid; GetWindowThreadProcessId(h, out pid);
+                if (pid != targetPid) return true;
+                var sb = new StringBuilder(256); GetWindowText(h, sb, 256);
+                r.Add(pid + " TOP: '" + sb + "'");
+                EnumChildWindows(h, (c, lp2) => {
+                  var cls = new StringBuilder(128); GetClassName(c, cls, 128);
+                  var txt = new StringBuilder(512); SendMessage(c, 0x000D, (IntPtr)512, txt);
+                  if (txt.Length > 0) r.Add("   [" + cls + "] " + txt.ToString().Replace("\r"," ").Replace("\n"," "));
+                  return true;
+                }, IntPtr.Zero);
+                return true;
+              }, IntPtr.Zero);
+              return r;
+            }
+          }
+          '@
           function Wait-ViServer([int]$seconds) {
             $until = (Get-Date).AddSeconds($seconds)
+            $n = 0
             while ((Get-Date) -lt $until) {
               Start-Sleep -Seconds 10
               $ok = (Test-NetConnection localhost -Port 3363 -WarningAction SilentlyContinue).TcpTestSucceeded
               Write-Host "$(Get-Date -Format HH:mm:ss) port 3363 open: $ok"
               if ($ok) { return $true }
+              $n++
+              if ($n % 6 -eq 0) {
+                Get-Process -Name LabVIEW -ErrorAction SilentlyContinue | ForEach-Object {
+                  Write-Host "--- LabVIEW pid $($_.Id) windows + child texts ---"
+                  [WinEnum]::Dump([uint32]$_.Id) | ForEach-Object { Write-Host $_ }
+                }
+              }
             }
             return $false
+          }
+          function Save-Screenshot {
+            Add-Type -AssemblyName System.Windows.Forms,System.Drawing
+            $b = [System.Windows.Forms.SystemInformation]::VirtualScreen
+            $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+            $g = [System.Drawing.Graphics]::FromImage($bmp)
+            $g.CopyFromScreen($b.Left, $b.Top, 0, 0, $bmp.Size)
+            $bmp.Save("$env:RUNNER_TEMP\desktop.png")
+            Write-Host "Saved screenshot."
           }
 
           Write-LvIni @(
@@ -133,6 +182,7 @@ jobs:
           )
           Start-Process "$lvdir\LabVIEW.exe"
           if (Wait-ViServer 300) { Write-Host "VI Server is up."; exit 0 }
+          Save-Screenshot
           throw "VI Server port 3363 never opened; LabVIEW cannot be driven by VIPM."
 
       - name: Install dragon dependencies
