@@ -114,9 +114,9 @@ jobs:
             [DllImport("user32.dll")] static extern void mouse_event(uint f, uint dx, uint dy, uint d, IntPtr i);
             public struct RECT { public int L, T, R, B; }
             delegate bool EnumProc(IntPtr h, IntPtr lp);
-            // Click at a position given as a fraction of the window size of the
-            // first top-level window of pid whose title matches exactly.
-            public static string ClickAt(uint targetPid, string title, double fx, double fy) {
+            // Click at an offset from the window's bottom-right corner (robust
+            // to dialog size changes) on the first matching window of pid.
+            public static string ClickFromBR(uint targetPid, string title, int dxFromRight, int dyFromBottom) {
               string result = "window not found";
               EnumWindows((h, lp) => {
                 uint pid; GetWindowThreadProcessId(h, out pid);
@@ -125,13 +125,14 @@ jobs:
                 if (sb.ToString().TrimEnd() != title) return true;
                 RECT r; GetWindowRect(h, out r);
                 if (r.R - r.L < 300) return true; // skip helper windows
-                int x = r.L + (int)((r.R - r.L) * fx);
-                int y = r.T + (int)((r.B - r.T) * fy);
+                int x = r.R - dxFromRight;
+                int y = r.B - dyFromBottom;
                 SetForegroundWindow(h);
                 System.Threading.Thread.Sleep(500);
                 SetCursorPos(x, y);
-                System.Threading.Thread.Sleep(200);
+                System.Threading.Thread.Sleep(300);
                 mouse_event(0x0002, 0, 0, 0, IntPtr.Zero); // LBUTTONDOWN
+                System.Threading.Thread.Sleep(100);
                 mouse_event(0x0004, 0, 0, 0, IntPtr.Zero); // LBUTTONUP
                 result = "clicked (" + x + "," + y + ") in rect " + r.L + "," + r.T + "," + r.R + "," + r.B;
                 return false;
@@ -175,14 +176,14 @@ jobs:
             }
             return $false
           }
-          function Save-Screenshot {
+          function Save-Screenshot([string]$name = "desktop") {
             Add-Type -AssemblyName System.Windows.Forms,System.Drawing
             $b = [System.Windows.Forms.SystemInformation]::VirtualScreen
             $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
             $g = [System.Drawing.Graphics]::FromImage($bmp)
             $g.CopyFromScreen($b.Left, $b.Top, 0, 0, $bmp.Size)
-            $bmp.Save("$env:RUNNER_TEMP\desktop.png")
-            Write-Host "Saved screenshot."
+            $bmp.Save("$env:RUNNER_TEMP\$name.png")
+            Write-Host "Saved screenshot $name.png"
           }
 
           Write-LvIni @(
@@ -199,17 +200,23 @@ jobs:
           Start-Process "$lvdir\LabVIEW.exe"
           # Give LabVIEW time to show the activation window, then start the
           # 7-day trial (fresh on every run since hosted runners are ephemeral).
-          # "Begin 7-Day Trial" sits at ~83% width / ~94% height of the dialog.
+          # Calibrated from screenshots: "Begin 7-Day Trial" center is ~139px
+          # left of the dialog's right edge, ~49px above its bottom.
           Start-Sleep -Seconds 60
-          $lvPid = (Get-Process -Name LabVIEW -ErrorAction SilentlyContinue | Select-Object -First 1).Id
-          if ($lvPid) {
-            $res = [WinEnum]::ClickAt([uint32]$lvPid, "LabVIEW", 0.83, 0.94)
-            Write-Host "Trial click: $res"
-            Start-Sleep -Seconds 10
-            Save-Screenshot
+          $attempts = @(@(139,49), @(139,42), @(150,49))
+          $i = 0
+          foreach ($a in $attempts) {
+            $i++
+            $lvPid = (Get-Process -Name LabVIEW -ErrorAction SilentlyContinue | Select-Object -First 1).Id
+            if (-not $lvPid) { break }
+            $res = [WinEnum]::ClickFromBR([uint32]$lvPid, "LabVIEW", $a[0], $a[1])
+            Write-Host "Trial click attempt ${i}: $res"
+            Start-Sleep -Seconds 15
+            Save-Screenshot "desktop-click$i"
+            if (Wait-ViServer 90) { Write-Host "VI Server is up."; exit 0 }
           }
-          if (Wait-ViServer 420) { Write-Host "VI Server is up."; exit 0 }
-          Save-Screenshot
+          if (Wait-ViServer 300) { Write-Host "VI Server is up."; exit 0 }
+          Save-Screenshot "desktop-final"
           throw "VI Server port 3363 never opened; LabVIEW cannot be driven by VIPM."
 
       - name: Install dragon dependencies
@@ -296,5 +303,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: desktop-screenshot
-          path: ${{ runner.temp }}\desktop.png
+          path: ${{ runner.temp }}\desktop*.png
           if-no-files-found: ignore
