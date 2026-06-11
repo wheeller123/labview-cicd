@@ -108,7 +108,36 @@ jobs:
             [DllImport("user32.dll")] static extern int GetClassName(IntPtr h, StringBuilder s, int n);
             [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
             [DllImport("user32.dll", CharSet=CharSet.Auto)] static extern IntPtr SendMessage(IntPtr h, uint m, IntPtr w, StringBuilder l);
+            [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr h, out RECT r);
+            [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr h);
+            [DllImport("user32.dll")] static extern bool SetCursorPos(int x, int y);
+            [DllImport("user32.dll")] static extern void mouse_event(uint f, uint dx, uint dy, uint d, IntPtr i);
+            public struct RECT { public int L, T, R, B; }
             delegate bool EnumProc(IntPtr h, IntPtr lp);
+            // Click at a position given as a fraction of the window size of the
+            // first top-level window of pid whose title matches exactly.
+            public static string ClickAt(uint targetPid, string title, double fx, double fy) {
+              string result = "window not found";
+              EnumWindows((h, lp) => {
+                uint pid; GetWindowThreadProcessId(h, out pid);
+                if (pid != targetPid) return true;
+                var sb = new StringBuilder(256); GetWindowText(h, sb, 256);
+                if (sb.ToString().TrimEnd() != title) return true;
+                RECT r; GetWindowRect(h, out r);
+                if (r.R - r.L < 300) return true; // skip helper windows
+                int x = r.L + (int)((r.R - r.L) * fx);
+                int y = r.T + (int)((r.B - r.T) * fy);
+                SetForegroundWindow(h);
+                System.Threading.Thread.Sleep(500);
+                SetCursorPos(x, y);
+                System.Threading.Thread.Sleep(200);
+                mouse_event(0x0002, 0, 0, 0, IntPtr.Zero); // LBUTTONDOWN
+                mouse_event(0x0004, 0, 0, 0, IntPtr.Zero); // LBUTTONUP
+                result = "clicked (" + x + "," + y + ") in rect " + r.L + "," + r.T + "," + r.R + "," + r.B;
+                return false;
+              }, IntPtr.Zero);
+              return result;
+            }
             public static List<string> Dump(uint targetPid) {
               var r = new List<string>();
               EnumWindows((h, lp) => {
@@ -168,20 +197,18 @@ jobs:
             'neverShowAddonActivationDialog=True'
           )
           Start-Process "$lvdir\LabVIEW.exe"
-          if (Wait-ViServer 300) { Write-Host "VI Server is up."; exit 0 }
-
-          Write-Host "::warning::VI Server did not open with quoted tokens; retrying with unquoted access lists"
-          Stop-Process -Name LabVIEW -Force -ErrorAction SilentlyContinue
-          Start-Sleep -Seconds 10
-          Write-LvIni @(
-            'server.tcp.enabled=True',
-            'server.tcp.port=3363',
-            'server.tcp.access=+*',
-            'server.vi.access=+*',
-            'ShowWelcomeOnLaunch=False'
-          )
-          Start-Process "$lvdir\LabVIEW.exe"
-          if (Wait-ViServer 300) { Write-Host "VI Server is up."; exit 0 }
+          # Give LabVIEW time to show the activation window, then start the
+          # 7-day trial (fresh on every run since hosted runners are ephemeral).
+          # "Begin 7-Day Trial" sits at ~83% width / ~94% height of the dialog.
+          Start-Sleep -Seconds 60
+          $lvPid = (Get-Process -Name LabVIEW -ErrorAction SilentlyContinue | Select-Object -First 1).Id
+          if ($lvPid) {
+            $res = [WinEnum]::ClickAt([uint32]$lvPid, "LabVIEW", 0.83, 0.94)
+            Write-Host "Trial click: $res"
+            Start-Sleep -Seconds 10
+            Save-Screenshot
+          }
+          if (Wait-ViServer 420) { Write-Host "VI Server is up."; exit 0 }
           Save-Screenshot
           throw "VI Server port 3363 never opened; LabVIEW cannot be driven by VIPM."
 
