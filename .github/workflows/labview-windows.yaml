@@ -67,8 +67,11 @@ jobs:
         shell: pwsh
         run: |
           # Without a Settings.ini, "vipm refresh" hangs on first-launch setup.
+          # Raise the LabVIEW connection timeout while copying: 120s is too
+          # tight for a cold first launch on a fresh runner.
           New-Item -ItemType Directory -Force -Path "C:\ProgramData\JKI\VIPM" | Out-Null
-          Copy-Item "$env:GITHUB_WORKSPACE\Docs\Settings.ini" "C:\ProgramData\JKI\VIPM\Settings.ini" -Force
+          (Get-Content "$env:GITHUB_WORKSPACE\Docs\Settings.ini") -replace 'Connection Timeout="120"','Connection Timeout="600"' |
+            Set-Content "C:\ProgramData\JKI\VIPM\Settings.ini"
 
       - name: VIPM version
         shell: pwsh
@@ -78,30 +81,59 @@ jobs:
         shell: pwsh
         run: vipm refresh
 
-      - name: Configure LabVIEW for headless VI Server access
+      - name: Configure and warm up LabVIEW VI Server
         shell: pwsh
         run: |
-          # VIPM installs packages by driving LabVIEW over VI Server. On a
-          # fresh machine LabVIEW's first launch blocks on welcome/licensing
-          # dialogs, so enable VI Server and suppress startup UI up front.
-          $ini = "C:\Program Files\National Instruments\LabVIEW 2023\LabVIEW.ini"
-          # Tokens must live under the [LabVIEW] section header or they are
-          # ignored (a fresh install has no LabVIEW.ini at all).
-          $existing = if (Test-Path $ini) { Get-Content $ini } else { @() }
-          $tokens = @(
-            "server.tcp.enabled=True",
-            "server.tcp.port=3363",
-            "server.tcp.access=+*",
-            "server.vi.access=+*",
-            "ShowWelcomeOnLaunch=False",
-            "neverShowAddonActivationDialog=True"
-          )
-          if ($existing -match '^\[LabVIEW\]') {
-            Add-Content -Path $ini -Value $tokens
-          } else {
-            Set-Content -Path $ini -Value (@("[LabVIEW]") + $existing + $tokens)
+          # VIPM drives LabVIEW over VI Server (TCP 3363). Enable it in
+          # LabVIEW.ini using LabVIEW's own quoting (strings are quoted),
+          # then launch LabVIEW and verify the port actually opens before
+          # handing over to vipm install.
+          $lvdir = "C:\Program Files\National Instruments\LabVIEW 2023"
+          $ini = "$lvdir\LabVIEW.ini"
+
+          function Write-LvIni([string[]]$tokens) {
+            Set-Content -Path $ini -Value (@("[LabVIEW]") + $tokens)
+            Write-Host "--- LabVIEW.ini ---"
+            Get-Content $ini | Write-Host
           }
-          Get-Content $ini
+          function Wait-ViServer([int]$seconds) {
+            $until = (Get-Date).AddSeconds($seconds)
+            while ((Get-Date) -lt $until) {
+              Start-Sleep -Seconds 10
+              $ok = (Test-NetConnection localhost -Port 3363 -WarningAction SilentlyContinue).TcpTestSucceeded
+              Write-Host "$(Get-Date -Format HH:mm:ss) port 3363 open: $ok"
+              if ($ok) { return $true }
+            }
+            return $false
+          }
+
+          Write-LvIni @(
+            'server.tcp.enabled=True',
+            'server.tcp.port=3363',
+            'server.tcp.access="+*"',
+            'server.vi.access="+*"',
+            'server.app.propertiesEnabled=True',
+            'server.vi.propertiesEnabled=True',
+            'server.vi.callsEnabled=True',
+            'ShowWelcomeOnLaunch=False',
+            'neverShowAddonActivationDialog=True'
+          )
+          Start-Process "$lvdir\LabVIEW.exe"
+          if (Wait-ViServer 300) { Write-Host "VI Server is up."; exit 0 }
+
+          Write-Host "::warning::VI Server did not open with quoted tokens; retrying with unquoted access lists"
+          Stop-Process -Name LabVIEW -Force -ErrorAction SilentlyContinue
+          Start-Sleep -Seconds 10
+          Write-LvIni @(
+            'server.tcp.enabled=True',
+            'server.tcp.port=3363',
+            'server.tcp.access=+*',
+            'server.vi.access=+*',
+            'ShowWelcomeOnLaunch=False'
+          )
+          Start-Process "$lvdir\LabVIEW.exe"
+          if (Wait-ViServer 300) { Write-Host "VI Server is up."; exit 0 }
+          throw "VI Server port 3363 never opened; LabVIEW cannot be driven by VIPM."
 
       - name: Install dragon dependencies
         shell: pwsh
