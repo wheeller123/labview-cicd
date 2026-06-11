@@ -12,41 +12,45 @@
 
 stages:
   - install
+  - dependencies
+  - build
+
+variables:
+  PROJECT: "Source\\Simple_Project.lvproj"
+  DRAGON: "Source\\Simple_Project.dragon"
+  BUILD_SPEC: "test_build"
+  LV_VERSION: "23.3"
+  LV_BITNESS: "64"
+  VIPM_EXE: "C:\\Program Files\\JKI\\VI Package Manager\\support\\vipm.exe"
+  NIPKG: "C:\\Program Files\\National Instruments\\NI Package Manager\\nipkg.exe"
+  # Generous time for VIPM/LabVIEW cold first connection.
+  VIPM_TIMEOUT: "1800"
 
 install-packages:
   stage: install
   tags:
     - adaptive-win22
-  timeout: 45m
+  timeout: 90m
   script:
     # Install NI Package Manager
     - |
-      Write-Host "[1/6] Installing NI Package Manager (VIPM installer prerequisite)..."
       $ProgressPreference = 'SilentlyContinue'
       $exe = "$env:TEMP\NIPackageManager.exe"
-      Write-Host "  Downloading NI Package Manager installer..."
       Invoke-WebRequest -Uri "https://download.ni.com/support/nipkg/products/ni-package-manager/installers/NIPackageManager25.8.0.exe" -OutFile $exe
-      Write-Host "  Running NIPM installer silently (--passive --accept-eulas --prevent-reboot)..."
       $p = Start-Process -Wait -PassThru -FilePath $exe -ArgumentList "--passive","--accept-eulas","--prevent-reboot"
       # NI installers: 0 = success, 3010 / -125071 = success but reboot needed.
       if ($p.ExitCode -notin 0,3010,-125071) { throw "NIPM install failed: $($p.ExitCode)" }
-      Write-Host "  NI Package Manager installed (exit $($p.ExitCode))."
     # Install NI LabVIEW 2020 SP1 Runtime (VIPM prerequisite)
     - |
-      Write-Host "[2/6] Installing NI LabVIEW 2020 SP1 Runtime (VIPM's missing prerequisite)..."
       $nipkg = "C:\Program Files\National Instruments\NI Package Manager\nipkg.exe"
-      Write-Host "  Adding LabVIEW 2020 runtime feeds (released + released-critical)..."
       # feed-add can fail if the feed already exists on a persistent runner; that
       # is fine, so don't let it abort the step.
       & $nipkg feed-add --name=lvrte2020 "https://download.ni.com/support/nipkg/products/ni-l/ni-labview-2020-runtime-engine/20.1/released"; cmd /c "exit 0"
       & $nipkg feed-add --name=lvrte2020-critical "https://download.ni.com/support/nipkg/products/ni-l/ni-labview-2020-runtime-engine/20.1/released-critical"; cmd /c "exit 0"
-      Write-Host "  Updating nipkg feed metadata..."
       & $nipkg update
-      Write-Host "  Installing ni-labview-2020-runtime-engine..."
       & $nipkg install --accept-eulas --assume-yes ni-labview-2020-runtime-engine
       # -125071 = reboot needed; packages are installed, runner cannot reboot.
       if ($LASTEXITCODE -notin 0,-125071) { throw "nipkg install failed: $LASTEXITCODE" }
-      Write-Host "  LabVIEW 2020 SP1 Runtime installed (nipkg exit $LASTEXITCODE; -125071 = reboot-deferred, OK)."
       # Clear the benign -125071 so GitLab does not re-raise it. Do NOT use
       # `exit 0` here: GitLab concatenates all script lines into one .ps1, so
       # exiting would skip every step below. A trivial native call resets
@@ -54,30 +58,109 @@ install-packages:
       cmd /c "exit 0"
     # Install VIPM
     - |
-      Write-Host "[3/6] Installing VIPM..."
       $ProgressPreference = 'SilentlyContinue'
       $exe = "$env:TEMP\vipm-setup.exe"
-      Write-Host "  Downloading VIPM preview installer..."
       Invoke-WebRequest -Uri "https://packages.jki.net/vipm/preview/vipm-setup-latest-preview.exe" -OutFile $exe
-      Write-Host "  Running VIPM installer silently (/exenoui /qn)..."
       # /exenoui /qn is the only fully non-interactive invocation; other
       # flag combinations hang the runner.
       $p = Start-Process -Wait -PassThru -FilePath $exe -ArgumentList "/exenoui","/qn"
       if ($p.ExitCode -ne 0) { throw "VIPM install failed: $($p.ExitCode)" }
       $env:PATH = "C:\Program Files\JKI\VI Package Manager\support;$env:PATH"
-      Write-Host "  VIPM installed and added to PATH (exit $($p.ExitCode))."
     # Seed VIPM Settings.ini
     - |
-      Write-Host "[4/6] Seeding VIPM Settings.ini (prevents 'vipm refresh' first-launch hang)..."
+      # Without a Settings.ini, "vipm refresh" hangs on first-launch setup.
       New-Item -ItemType Directory -Force -Path "C:\ProgramData\JKI\VIPM" | Out-Null
       Copy-Item "$env:CI_PROJECT_DIR\Docs\Settings.ini" "C:\ProgramData\JKI\VIPM\Settings.ini" -Force
-      Write-Host "  Settings.ini copied to C:\ProgramData\JKI\VIPM."
     # VIPM version
     - |
-      Write-Host "[5/6] Checking VIPM version..."
       & "C:\Program Files\JKI\VI Package Manager\support\vipm.exe" version
     # VIPM refresh
     - |
-      Write-Host "[6/6] Refreshing VIPM package list..."
       & "C:\Program Files\JKI\VI Package Manager\support\vipm.exe" refresh
-      Write-Host "  VIPM refresh complete."
+
+    # Configure NI Licence
+    - |
+      Write-Output "adding NI license"
+      [System.Environment]::SetEnvironmentVariable('NILM_LICENSE_FILE','27010@GAL0GBMV2446.app.jlrcentral.com',[System.EnvironmentVariableTarget]::Machine)
+
+      $hostsPath = "C:\Windows\System32\drivers\etc\hosts"
+      $entry = "        10.214.6.45    GAL0GBMV2446.app.jlrcentral.com"
+      
+      # Escape special characters for regex pattern
+      $escapedEntry = [regex]::Escape($entry)
+      
+      # Check if the entry already exists
+      if (-not (Select-String -Path $hostsPath -Pattern $escapedEntry)) {
+          Add-Content -Path $hostsPath -Value $entry
+          Write-Output "Entry added successfully."
+      } else {
+          Write-Output "Entry already exists."
+      }
+
+      # Retrieve the current list of DNS suffixes
+      $currentSuffixes = (Get-DnsClientGlobalSetting).SuffixSearchList
+ 
+      # Add the new DNS suffix to the list
+      $newSuffix = "app.jlrcentral.com"
+      $updatedSuffixes = $currentSuffixes + $newSuffix
+      
+      # Set the updated list of DNS suffixes
+      Set-DnsClientGlobalSetting -SuffixSearchList $updatedSuffixes
+      
+      Write-Output "DNS suffix added successfully."
+
+      echo "Installing Git"
+      Get-ExecutionPolicy
+      Set-ExecutionPolicy Bypass -Scope Process -Force; [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072; iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
+      choco install -y git
+    # Install LabVIEW 2023 Q3 (64-bit) dev system
+    - |
+      Write-Host "Installing LabVIEW 2023 Q3 (64-bit) dev system..."
+      Write-Host "  Adding LabVIEW 2023 feeds (released + released-critical)..."
+      # feed-add can fail if the feed already exists on a persistent runner.
+      & "$env:NIPKG" feed-add --name=lv2023 "https://download.ni.com/support/nipkg/products/ni-l/ni-labview-2023/23.3/released"; cmd /c "exit 0"
+      & "$env:NIPKG" feed-add --name=lv2023-critical "https://download.ni.com/support/nipkg/products/ni-l/ni-labview-2023/23.3/released-critical"; cmd /c "exit 0"
+      Write-Host "  Updating nipkg feed metadata..."
+      & "$env:NIPKG" update
+      Write-Host "  Installing ni-labview-2023-core-en (64-bit)..."
+      & "$env:NIPKG" install --accept-eulas --assume-yes ni-labview-2023-core-en
+      # -125071 = reboot needed; packages are installed, runner cannot reboot.
+      if ($LASTEXITCODE -notin 0,-125071) { throw "LabVIEW 2023 install failed: $LASTEXITCODE" }
+      Write-Host "  LabVIEW 2023 Q3 installed (nipkg exit $LASTEXITCODE)."
+      cmd /c "exit 0"
+
+install-dependencies:
+  stage: dependencies
+  tags:
+    - adaptive-win22
+  timeout: 60m
+  script:
+    - |
+      Write-Host "Installing dragon dependencies via VIPM..."
+      Write-Host "  vipm install $env:CI_PROJECT_DIR\$env:DRAGON"
+      # The .dragon file pins the package set; VIPM resolves the LabVIEW target
+      # automatically from it.
+      & "$env:VIPM_EXE" install "$env:CI_PROJECT_DIR\$env:DRAGON"
+      if ($LASTEXITCODE -ne 0) { throw "vipm install failed: $LASTEXITCODE" }
+      Write-Host "  Dragon dependencies installed."
+
+build-build-spec:
+  stage: build
+  tags:
+    - adaptive-win22
+  timeout: 60m
+  script:
+    - |
+      Write-Host "Building '$env:BUILD_SPEC' in $env:PROJECT via LabVIEWCLI..."
+      LabVIEWCLI -OperationName ExecuteBuildSpec `
+        -ProjectPath "$env:CI_PROJECT_DIR\$env:PROJECT" `
+        -BuildSpecName "$env:BUILD_SPEC" `
+        -LabVIEWVersion $env:LV_VERSION -LabVIEWBitness $env:LV_BITNESS
+      if ($LASTEXITCODE -ne 0) { throw "LabVIEWCLI build failed: $LASTEXITCODE" }
+      Write-Host "  Build complete."
+  artifacts:
+    name: "$BUILD_SPEC-$CI_COMMIT_SHORT_SHA"
+    paths:
+      - "Source/Build/"
+    when: on_success
+    expire_in: 1 week
