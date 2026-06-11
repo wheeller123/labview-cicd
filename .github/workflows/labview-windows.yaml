@@ -83,7 +83,10 @@ jobs:
           # fresh machine LabVIEW's first launch blocks on welcome/licensing
           # dialogs, so enable VI Server and suppress startup UI up front.
           $ini = "C:\Program Files\National Instruments\LabVIEW 2023\LabVIEW.ini"
-          Add-Content -Path $ini -Value @(
+          # Tokens must live under the [LabVIEW] section header or they are
+          # ignored (a fresh install has no LabVIEW.ini at all).
+          $existing = if (Test-Path $ini) { Get-Content $ini } else { @() }
+          $tokens = @(
             "server.tcp.enabled=True",
             "server.tcp.port=3363",
             "server.tcp.access=+*",
@@ -91,6 +94,11 @@ jobs:
             "ShowWelcomeOnLaunch=False",
             "neverShowAddonActivationDialog=True"
           )
+          if ($existing -match '^\[LabVIEW\]') {
+            Add-Content -Path $ini -Value $tokens
+          } else {
+            Set-Content -Path $ini -Value (@("[LabVIEW]") + $existing + $tokens)
+          }
           Get-Content $ini
 
       - name: Install dragon dependencies
@@ -104,14 +112,36 @@ jobs:
             vipm install "$using:env:GITHUB_WORKSPACE\Source\Simple_Project.dragon" 2>&1
             $LASTEXITCODE
           }
+          Add-Type @'
+          using System;
+          using System.Collections.Generic;
+          using System.Runtime.InteropServices;
+          using System.Text;
+          public class WinEnum {
+            [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc cb, IntPtr lp);
+            [DllImport("user32.dll")] static extern int GetWindowText(IntPtr h, StringBuilder s, int n);
+            [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+            delegate bool EnumProc(IntPtr h, IntPtr lp);
+            public static List<string> All() {
+              var r = new List<string>();
+              EnumWindows((h, lp) => {
+                var sb = new StringBuilder(256);
+                GetWindowText(h, sb, 256);
+                if (sb.Length > 0) { uint pid; GetWindowThreadProcessId(h, out pid); r.Add(pid + ": " + sb); }
+                return true;
+              }, IntPtr.Zero);
+              return r;
+            }
+          }
+          '@
           $deadline = (Get-Date).AddMinutes(12)
           while ((Get-Date) -lt $deadline -and $job.State -eq 'Running') {
             Start-Sleep -Seconds 45
-            Write-Host "--- $(Get-Date -Format HH:mm:ss) window titles ---"
-            Get-Process | Where-Object { $_.MainWindowTitle } |
-              Select-Object ProcessName, MainWindowTitle | Format-Table -AutoSize | Out-String | Write-Host
-            Write-Host "--- LabVIEW/VIPM processes ---"
-            Get-Process -Name "LabVIEW","vipm","VIPM*" -ErrorAction SilentlyContinue |
+            Write-Host "--- $(Get-Date -Format HH:mm:ss) all top-level windows (pid: title) ---"
+            [WinEnum]::All() | ForEach-Object { Write-Host $_ }
+            $port = Test-NetConnection -ComputerName localhost -Port 3363 -WarningAction SilentlyContinue
+            Write-Host "VI Server port 3363 open: $($port.TcpTestSucceeded)"
+            Get-Process -Name "LabVIEW","vipm" -ErrorAction SilentlyContinue |
               Select-Object ProcessName, Id, CPU | Format-Table -AutoSize | Out-String | Write-Host
           }
           $out = Receive-Job $job -Wait
