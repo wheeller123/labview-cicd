@@ -10,9 +10,11 @@
 #   $env:GITHUB_WORKSPACE -> $env:CI_PROJECT_DIR
 #   GITHUB_PATH append    -> prepend to $env:PATH for the rest of the job
 
+# Everything runs in ONE job so it works whether or not the runner is
+# persistent: installs, dragon dependencies and the build all happen on the
+# same machine in sequence.
+
 stages:
-  - install
-  - dependencies
   - build
 
 variables:
@@ -26,11 +28,11 @@ variables:
   # Generous time for VIPM/LabVIEW cold first connection.
   VIPM_TIMEOUT: "1800"
 
-install-packages:
-  stage: install
+labview-build:
+  stage: build
   tags:
     - adaptive-win22
-  timeout: 90m
+  timeout: 120m
   script:
     # Install NI Package Manager
     - |
@@ -149,13 +151,7 @@ install-packages:
       Set-Content -Path $ini -Value $tokens
       Write-Host "  Wrote $ini"
       Get-Content $ini | Write-Host
-
-install-dependencies:
-  stage: dependencies
-  tags:
-    - adaptive-win22
-  timeout: 60m
-  script:
+    # Install dragon dependencies via VIPM
     - |
       Write-Host "Installing dragon dependencies via VIPM..."
       Write-Host "  vipm install $env:CI_PROJECT_DIR\$env:DRAGON"
@@ -164,13 +160,7 @@ install-dependencies:
       & "$env:VIPM_EXE" install "$env:CI_PROJECT_DIR\$env:DRAGON"
       if ($LASTEXITCODE -ne 0) { throw "vipm install failed: $LASTEXITCODE" }
       Write-Host "  Dragon dependencies installed."
-
-build-build-spec:
-  stage: build
-  tags:
-    - adaptive-win22
-  timeout: 60m
-  script:
+    # Build the LabVIEW project build spec
     - |
       Write-Host "Building '$env:BUILD_SPEC' in $env:PROJECT via LabVIEWCLI..."
       LabVIEWCLI -OperationName ExecuteBuildSpec `
