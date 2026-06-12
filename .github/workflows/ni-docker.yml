@@ -1,5 +1,10 @@
 name: NI Docker Build
 
+# Template pipeline: build a LabVIEW project inside NI's official LabVIEW
+# Windows container, with dependencies installed by VIPM (latest preview)
+# from the project's .dragon file. Nothing package-specific is hardcoded —
+# point DRAGON/PROJECT/BUILD_SPEC at another project to reuse.
+
 on:
   push:
     branches: [ main ]
@@ -9,8 +14,6 @@ on:
 
 env:
   NI_IMAGE: nationalinstruments/labview:latest-windows
-  OGLIB_URL: https://s3-us-west-1.amazonaws.com/jki-vi-package-network/packages/packages/oglib_array/oglib_array-6.0.1.20.vip
-  OGLIB_SHA256: c80e5d1cd70d694f8e61d094d57f0c2c69571cb2261c2ff54bd9605d82b96faa
 
 jobs:
   build:
@@ -24,8 +27,15 @@ jobs:
       - name: Start Docker engine (Windows containers)
         shell: pwsh
         run: |
-          # windows-latest runners intermittently start with the Docker daemon
-          # down (actions/runner-images#13729).
+          # Move the docker data-root to the runner's large D: drive (the NI
+          # image does not fit on C:), then start the daemon — windows-latest
+          # runners intermittently boot with it down (runner-images#13729).
+          try { Stop-Service docker -ErrorAction Stop } catch {}
+          $cfgDir = 'C:\ProgramData\docker\config'
+          $cfg = if (Test-Path "$cfgDir\daemon.json") { Get-Content "$cfgDir\daemon.json" -Raw | ConvertFrom-Json } else { [pscustomobject]@{} }
+          $cfg | Add-Member -NotePropertyName 'data-root' -NotePropertyValue 'D:\docker' -Force
+          New-Item -ItemType Directory -Force -Path $cfgDir, 'D:\docker' | Out-Null
+          ($cfg | ConvertTo-Json) | Set-Content "$cfgDir\daemon.json"
           try { Start-Service docker -ErrorAction Stop } catch {}
           $deadline = (Get-Date).AddMinutes(5)
           do {
@@ -35,35 +45,61 @@ jobs:
           } while (-not $ok -and (Get-Date) -lt $deadline)
           if (-not $ok) { throw 'Docker daemon did not become available' }
 
-      - name: Fetch dragon dependency payload (oglib_array, VIPM-free)
-        shell: pwsh
-        run: |
-          # VIPM cannot drive LabVIEW inside the container (GUI LabVIEW never
-          # starts there), so install the dragon's only dependency directly:
-          # a .vip is a ZIP whose "File Group 0" maps onto the LabVIEW dir.
-          # Main.vi links the OpenG VIs via <userlib>\_OpenG.lib\array\array.llb.
-          $ProgressPreference = 'SilentlyContinue'
-          $vip = "$env:RUNNER_TEMP\oglib_array.vip"
-          Invoke-WebRequest -Uri $env:OGLIB_URL -OutFile $vip
-          $hash = (Get-FileHash $vip -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($hash -ne $env:OGLIB_SHA256) { throw "SHA256 mismatch: $hash" }
-          Add-Type -AssemblyName System.IO.Compression.FileSystem
-          [System.IO.Compression.ZipFile]::ExtractToDirectory($vip, "$env:GITHUB_WORKSPACE\_oglib")
-
       - name: Pull NI LabVIEW image
         shell: pwsh
-        run: docker pull $env:NI_IMAGE
+        run: |
+          docker pull $env:NI_IMAGE
+          if ($LASTEXITCODE -ne 0) { throw "docker pull failed: $LASTEXITCODE" }
 
-      - name: Install dependencies and build test_build
+      - name: Start container
         shell: pwsh
         run: |
-          docker run --rm -v "${{ github.workspace }}:C:\workspace" $env:NI_IMAGE `
-            powershell -ExecutionPolicy Bypass -File C:\workspace\Docker\ci-build.ps1
+          # One long-lived container so VIPM install + keep-alive LabVIEW +
+          # build all share the same state.
+          docker run -d --name lv -v "${{ github.workspace }}:C:\workspace" $env:NI_IMAGE ping -t localhost
+          if ($LASTEXITCODE -ne 0) { throw "docker run failed: $LASTEXITCODE" }
+          docker exec lv cmd /c echo container-ready
+          if ($LASTEXITCODE -ne 0) { throw "container not responding: $LASTEXITCODE" }
+
+      - name: Install VIPM (latest preview) + refresh
+        timeout-minutes: 25
+        shell: pwsh
+        run: |
+          docker exec lv powershell -NoProfile -ExecutionPolicy Bypass -File C:\workspace\.github\scripts\container-setup-vipm.ps1
+          if ($LASTEXITCODE -ne 0) { throw "VIPM setup failed: $LASTEXITCODE" }
+
+      - name: Install dragon dependencies (vipm install)
+        timeout-minutes: 50
+        shell: pwsh
+        run: |
+          docker exec lv powershell -NoProfile -ExecutionPolicy Bypass -File C:\workspace\.github\scripts\container-install-deps.ps1
+          if ($LASTEXITCODE -ne 0) { throw "dependency install failed: $LASTEXITCODE" }
+
+      - name: Build test_build (ExecuteBuildSpec)
+        timeout-minutes: 20
+        shell: pwsh
+        run: |
+          docker exec lv powershell -NoProfile -ExecutionPolicy Bypass -File C:\workspace\.github\scripts\container-build.ps1
           if ($LASTEXITCODE -ne 0) { throw "container build failed: $LASTEXITCODE" }
 
-      - name: Upload build artifacts
+      - name: Verify build output on host
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'Build\Application.exe'
+          if (-not (Test-Path $exe)) { throw "missing on host: $exe" }
+          if ((Get-Item $exe).Length -le 0) { throw "$exe is empty" }
+          Write-Host "Build output present: $exe ($((Get-Item $exe).Length) bytes)"
+
+      - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
           name: test_build
           path: Build/**
           if-no-files-found: error
+
+      - name: Tear down container
+        if: always()
+        shell: pwsh
+        run: |
+          docker rm -f lv 2>&1 | Out-Null
+          exit 0
