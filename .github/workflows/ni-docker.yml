@@ -1,0 +1,69 @@
+name: NI Docker Build
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+env:
+  NI_IMAGE: nationalinstruments/labview:latest-windows
+  OGLIB_URL: https://s3-us-west-1.amazonaws.com/jki-vi-package-network/packages/packages/oglib_array/oglib_array-6.0.1.20.vip
+  OGLIB_SHA256: c80e5d1cd70d694f8e61d094d57f0c2c69571cb2261c2ff54bd9605d82b96faa
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Start Docker engine (Windows containers)
+        shell: pwsh
+        run: |
+          # windows-latest runners intermittently start with the Docker daemon
+          # down (actions/runner-images#13729).
+          try { Start-Service docker -ErrorAction Stop } catch {}
+          $deadline = (Get-Date).AddMinutes(5)
+          do {
+            Start-Sleep -Seconds 5
+            docker version 2>$null | Out-Null
+            $ok = ($LASTEXITCODE -eq 0)
+          } while (-not $ok -and (Get-Date) -lt $deadline)
+          if (-not $ok) { throw 'Docker daemon did not become available' }
+
+      - name: Fetch dragon dependency payload (oglib_array, VIPM-free)
+        shell: pwsh
+        run: |
+          # VIPM cannot drive LabVIEW inside the container (GUI LabVIEW never
+          # starts there), so install the dragon's only dependency directly:
+          # a .vip is a ZIP whose "File Group 0" maps onto the LabVIEW dir.
+          # Main.vi links the OpenG VIs via <userlib>\_OpenG.lib\array\array.llb.
+          $ProgressPreference = 'SilentlyContinue'
+          $vip = "$env:RUNNER_TEMP\oglib_array.vip"
+          Invoke-WebRequest -Uri $env:OGLIB_URL -OutFile $vip
+          $hash = (Get-FileHash $vip -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($hash -ne $env:OGLIB_SHA256) { throw "SHA256 mismatch: $hash" }
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          [System.IO.Compression.ZipFile]::ExtractToDirectory($vip, "$env:GITHUB_WORKSPACE\_oglib")
+
+      - name: Pull NI LabVIEW image
+        shell: pwsh
+        run: docker pull $env:NI_IMAGE
+
+      - name: Install dependencies and build test_build
+        shell: pwsh
+        run: |
+          docker run --rm -v "${{ github.workspace }}:C:\workspace" $env:NI_IMAGE `
+            powershell -ExecutionPolicy Bypass -File C:\workspace\Docker\ci-build.ps1
+          if ($LASTEXITCODE -ne 0) { throw "container build failed: $LASTEXITCODE" }
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: test_build
+          path: Build/**
+          if-no-files-found: error
