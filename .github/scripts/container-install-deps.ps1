@@ -1,34 +1,33 @@
 # Runs INSIDE the stock NI LabVIEW container.
 #
-# Strategy: VIPM's package_install drives LabVIEW over VI Server (TCP 3363).
-# VIPM itself launches LabVIEW.exe with NO arguments, which CRASHES in this
-# container (crashpad_handler spawns moments later); LabVIEWCLI's launch
-# survives because of its flags (`LabVIEW.exe --headless -labviewcli`).
-# A MassCompile keep-alive also fails: it keeps LabVIEW's UI thread busy so
-# VI Server never services VIPM's requests.
+# Installs the dragon file's dependencies into EVERY LabVIEW dev system present
+# in the image (not just one), so the later build step can produce a build-spec
+# output per LabVIEW version. For an EXE the version makes no difference, but
+# for lvlibs / packed libraries (e.g. VeriStand custom devices for RT targets)
+# the saved LabVIEW version determines downstream compatibility, so users need
+# the artifact built with their exact LabVIEW version.
 #
-# So: launch an IDLE headless LabVIEW ourselves (--headless, falling back to
-# --headless -labviewcli), verify the process survives and VI Server listens
-# on 3363, run `vipm version` -> `vipm refresh`, align VIPM's live [Targets]
-# entry (port 3363, Tested=TRUE, active), restart the VIPM Desktop so it
-# re-reads settings, then run a real `vipm install <dragon>` against the live
-# instance. Every dependency declared in the dragon file is verified via
-# `vipm list --installed`. Finally LabVIEW is shut down so the build step
-# starts from a clean session. A background watcher logs every LabVIEW /
-# LabVIEWCLI / crashpad_handler spawn throughout, so crashes and rogue VIPM
-# launches are observable.
+# Strategy (per version): VIPM's package_install drives LabVIEW over VI Server
+# (TCP 3363). VIPM itself launches LabVIEW.exe with NO arguments, which CRASHES
+# in this container; LabVIEWCLI's launch survives because of its flags
+# (`LabVIEW.exe --headless -labviewcli`). A MassCompile keep-alive also fails:
+# it keeps LabVIEW's UI thread busy so VI Server never services VIPM. So we
+# launch an IDLE headless LabVIEW ourselves, verify port 3363, run
+# `vipm version` -> `vipm refresh`, align VIPM's live [Targets] entry to that
+# LabVIEW (port 3363, Tested=TRUE, active) and restart VIPM Desktop, then run a
+# real `vipm install <dragon>` and verify every dependency via
+# `vipm list --installed`.
 #
-# Template-quality: the dragon file is the single source of truth for both the
-# pinned LabVIEW version and the dependency list. Nothing package-specific is
-# hardcoded here.
+# Template-quality: the dragon file is the single source of truth for the
+# dependency list. Nothing package-specific is hardcoded.
 
 $ErrorActionPreference = 'Stop'
 
-$vipmExe  = 'C:\Program Files\JKI\VI Package Manager\support\vipm.exe'
-$dragon   = 'C:\workspace\Source\Simple_Project.dragon'
-$niDir    = 'C:\Program Files\National Instruments'
-$settings = 'C:\ProgramData\JKI\VIPM\Settings.ini'
-$targetFile = 'C:\workspace\lv-target.txt'
+$vipmExe   = 'C:\Program Files\JKI\VI Package Manager\support\vipm.exe'
+$dragon    = 'C:\workspace\Source\Simple_Project.dragon'
+$niDir     = 'C:\Program Files\National Instruments'
+$settings  = 'C:\ProgramData\JKI\VIPM\Settings.ini'
+$targetsFile = 'C:\workspace\lv-targets.txt'   # newline-separated list of built versions
 
 function Test-Port3363 {
     $c = New-Object System.Net.Sockets.TcpClient
@@ -68,49 +67,26 @@ function Start-IdleLabVIEW {
     return $null
 }
 
-try {
-    # ---- 1. Parse the dragon file (single source of truth) -------------------
-    if (-not (Test-Path $dragon)) { throw "dragon file not found: $dragon" }
-    $dragonYear = $null
-    $deps = @()
-    $inDeps = $false
-    foreach ($line in (Get-Content $dragon)) {
-        if ($line -match '^\s*\[(.+)\]\s*$') { $inDeps = ($Matches[1] -eq 'vipm.dependencies'); continue }
-        if ($line -match '^\s*labview-version\s*=\s*"?(\d{4})"?') { $dragonYear = [int]$Matches[1] }
-        if ($inDeps -and $line -match '^\s*([A-Za-z0-9_\-\.]+)\s*=') { $deps += $Matches[1] }
+function Stop-AllLabVIEW {
+    Stop-Process -Name 'LabVIEW' -Force -ErrorAction SilentlyContinue
+    for ($i = 0; $i -lt 12; $i++) {
+        if (-not (Get-Process -Name 'LabVIEW' -ErrorAction SilentlyContinue)) { return }
+        Start-Sleep -Seconds 5
     }
-    if ($deps.Count -eq 0) { throw "no [vipm.dependencies] entries found in $dragon" }
-    Write-Host "Dragon pins LabVIEW $dragonYear; dependencies: $($deps -join ', ')"
+    throw 'LabVIEW still running 60s after Stop-Process'
+}
 
-    # ---- 2. Discover installed LabVIEW dev systems ---------------------------
-    $installed = @(Get-ChildItem $niDir -Directory -Filter 'LabVIEW *' -ErrorAction SilentlyContinue |
-        Where-Object { (Test-Path (Join-Path $_.FullName 'LabVIEW.exe')) -and ($_.Name -match 'LabVIEW (\d{4})$') } |
-        ForEach-Object { [int]($_.Name -replace 'LabVIEW ', '') } | Sort-Object)
-    if ($installed.Count -eq 0) { throw "no LabVIEW dev systems found under $niDir" }
-    Write-Host "Installed LabVIEW versions: $($installed -join ', ')"
+# Installs the dragon dependencies into a single LabVIEW version. Throws on
+# failure so the caller can record it.
+function Install-DepsForVersion {
+    param([int]$year, [string[]]$deps)
 
-    # ---- 3. LabVIEW versions VIPM can see (Settings.ini [Targets]) -----------
-    $visible = @()
-    $inTargets = $false
-    if (Test-Path $settings) {
-        foreach ($line in (Get-Content $settings)) {
-            if ($line -match '^\[(.+)\]') { $inTargets = ($Matches[1] -eq 'Targets') }
-            if ($inTargets -and $line -match 'Versions \d+="(\d+)\.\d+') { $visible += (2000 + [int]$Matches[1]) }
-        }
-    }
-    Write-Host "VIPM-visible LabVIEW versions: $(if ($visible) { $visible -join ', ' } else { '(none parsed)' })"
-
-    # ---- 4. Choose the target: dragon-pinned if usable, else newest ----------
-    $candidates = @($installed | Where-Object { ($visible.Count -eq 0) -or ($visible -contains $_) })
-    if ($candidates.Count -eq 0) { $candidates = $installed }
-    $year = if ($dragonYear -and ($candidates -contains $dragonYear)) { $dragonYear }
-            else { ($candidates | Measure-Object -Maximum).Maximum }
     $lvDir = Join-Path $niDir "LabVIEW $year"
     $lvExe = Join-Path $lvDir 'LabVIEW.exe'
-    Write-Host "Target: LabVIEW $year (64-bit) at $lvExe"
-    Set-Content -Path $targetFile -Value $year -Force
+    Write-Host ""
+    Write-Host "##########[ Installing deps into LabVIEW $year ]##########"
 
-    # ---- 5. Enable VI Server in the target's LabVIEW.ini ---------------------
+    # --- Enable VI Server in this version's LabVIEW.ini ---
     $serverKeys = [ordered]@{
         'server.tcp.enabled'           = 'True'
         'server.tcp.port'              = '3363'
@@ -134,19 +110,18 @@ try {
     Set-Content -Path $iniPath -Value $lines -Encoding Ascii -Force
     Write-Host "VI Server enabled in $iniPath (port 3363)."
 
-
-    # ---- 7. IDLE headless keep-alive LabVIEW ----------------------------------
+    # --- Idle headless keep-alive LabVIEW ---
     $kaProc = Start-IdleLabVIEW $lvExe @('--headless') 'variant A (--headless)' 6
     if (-not $kaProc) {
         $kaProc = Start-IdleLabVIEW $lvExe @('--headless', '-labviewcli') 'variant B (--headless -labviewcli)' 6
     }
     if (-not $kaProc) {
-        throw 'no headless LabVIEW launch variant stayed alive with port 3363 open'
+        throw "LabVIEW $year : no headless launch variant stayed alive with port 3363 open"
     }
     Write-Host "Idle keep-alive LabVIEW established (PID $($kaProc.Id))."
-    Start-Sleep -Seconds 20   # let LabVIEW settle before VIPM connects
+    Start-Sleep -Seconds 20
 
-    # ---- 8. vipm version -> vipm refresh (required order) ---------------------
+    # --- vipm version -> vipm refresh (required order) ---
     Write-Host '== vipm version =='
     & $vipmExe version
     Write-Host "vipm version exit code: $LASTEXITCODE"
@@ -154,14 +129,9 @@ try {
     & $vipmExe refresh
     if ($LASTEXITCODE -ne 0) { throw "vipm refresh failed with exit code $LASTEXITCODE" }
 
-    # ---- 9. Align VIPM's live target entry with the held-open LabVIEW ---------
-    # VIPM connects to the port configured on ITS target entry; make sure the
-    # entry for our LabVIEW says port 3363, Tested=TRUE, Disabled=FALSE, and is
-    # the active target, then restart the VIPM Desktop so it re-reads settings.
+    # --- Align VIPM's live [Targets] entry for this version to port 3363 ---
     $content = @(Get-Content $settings)
-    $targetIdx = $null
-    $targetVer = $null
-    $inTargets = $false
+    $targetIdx = $null; $targetVer = $null; $inTargets = $false
     foreach ($l in $content) {
         if ($l -match '^\[(.+)\]') { $inTargets = ($Matches[1] -eq 'Targets') }
         elseif ($inTargets -and $l -match '^Versions (\d+)="((\d+)\.[^"]*)"') {
@@ -171,70 +141,83 @@ try {
     if ($null -eq $targetIdx) {
         Write-Host "WARNING: no [Targets] entry found for LabVIEW $year; leaving Settings.ini untouched."
     } else {
-        Write-Host "Aligning [Targets] entry $targetIdx ($targetVer): port 3363, Tested=TRUE, Disabled=FALSE, active."
+        Write-Host "Aligning [Targets] entry $targetIdx ($targetVer): port 3363, Tested=TRUE, active."
         $aligned = foreach ($l in $content) {
             if ($l -match '^Ports="<size\(s\)=(\d+)>\s*([^"]*)"') {
                 $vals = @($Matches[2].Trim() -split '\s+')
                 if ($vals.Count -gt $targetIdx) { $vals[$targetIdx] = '3363' }
                 'Ports="<size(s)=' + $Matches[1] + '> ' + ($vals -join ' ') + '"'
             }
-            elseif ($l -match "^Tested $targetIdx=")   { "Tested $targetIdx=`"TRUE`"" }
-            elseif ($l -match "^Disabled $targetIdx=") { "Disabled $targetIdx=`"FALSE`"" }
-            elseif ($l -match '^Connection Timeout=')  { 'Connection Timeout="600"' }
+            elseif ($l -match "^Tested $targetIdx=")     { "Tested $targetIdx=`"TRUE`"" }
+            elseif ($l -match "^Disabled $targetIdx=")   { "Disabled $targetIdx=`"FALSE`"" }
+            elseif ($l -match '^Connection Timeout=')    { 'Connection Timeout="600"' }
             elseif ($l -match '^Active Target\.Version=') { "Active Target.Version=`"$targetVer`"" }
             else { $l }
         }
         Set-Content -Path $settings -Value $aligned -Force
-
         Write-Host '== restarting VIPM Desktop so it re-reads settings =='
         Stop-Process -Name 'VI Package Manager' -Force -ErrorAction SilentlyContinue
         Stop-Process -Name 'vipm' -Force -ErrorAction SilentlyContinue
         Start-Sleep -Seconds 10
-
     }
-    if ($kaProc.HasExited) { throw 'keep-alive LabVIEW died before the install started' }
+    if ($kaProc.HasExited) { throw "LabVIEW $year : keep-alive died before the install started" }
 
-    # ---- 10. Real vipm install of the dragon file -----------------------------
-    # --yes: skip [y/N] prompt; --timeout 1500: replace ~180s default; version/
-    # bitness flags: the dragon's pin is only honored when that LabVIEW exists,
-    # otherwise we explicitly retarget the held-open LabVIEW.
+    # --- Real vipm install of the dragon file into this version ---
     Write-Host "== vipm install $dragon (LabVIEW $year, 64-bit) =="
     & $vipmExe -v --timeout 1500 --labview-version $year --labview-bitness 64 install --yes $dragon
-    $rc = $LASTEXITCODE
-    Write-Host "vipm install exit code: $rc"
-    if ($rc -ne 0) {
-        throw "vipm install failed with exit code $rc"
-    }
+    if ($LASTEXITCODE -ne 0) { throw "vipm install (LabVIEW $year) failed with exit code $LASTEXITCODE" }
 
-    # ---- 11. Verify EVERY dragon dependency is genuinely installed ------------
+    # --- Verify EVERY dragon dependency is genuinely installed ---
     Write-Host '== vipm list --installed =='
     $listOut = (& $vipmExe --labview-version $year --labview-bitness 64 list --installed) | Out-String
     Write-Host $listOut
-    if ($LASTEXITCODE -ne 0) { throw "vipm list --installed failed with exit code $LASTEXITCODE" }
+    if ($LASTEXITCODE -ne 0) { throw "vipm list --installed (LabVIEW $year) failed with exit code $LASTEXITCODE" }
     foreach ($d in $deps) {
         if ($listOut -notmatch [regex]::Escape($d)) {
-            throw "dependency '$d' from the dragon file is NOT reported installed"
+            throw "dependency '$d' is NOT reported installed for LabVIEW $year"
         }
-        Write-Host "VERIFIED installed: $d"
+        Write-Host "VERIFIED installed (LabVIEW ${year}): $d"
     }
 
-    # ---- 12. Tear down the keep-alive so the build gets a clean LabVIEW -------
-    Write-Host '== shutting down keep-alive LabVIEW =='
-    Stop-Process -Name 'LabVIEW' -Force -ErrorAction SilentlyContinue
-    $gone = $false
-    for ($i = 0; $i -lt 12; $i++) {
-        if (-not (Get-Process -Name 'LabVIEW' -ErrorAction SilentlyContinue)) { $gone = $true; break }
-        Start-Sleep -Seconds 5
-    }
-    if (-not $gone) { throw 'LabVIEW still running 60s after Stop-Process' }
-    # Drop autosave/recovery leftovers so the build's LabVIEW launch cannot
-    # stall on an "autorecover?" prompt after the forced kill.
+    # --- Tear down so the next version (and the build) start clean ---
+    Stop-AllLabVIEW
     Get-ChildItem "$env:USERPROFILE\Documents" -Directory -Filter 'LabVIEW Data*' -ErrorAction SilentlyContinue |
         ForEach-Object {
             Get-ChildItem $_.FullName -Directory -Filter 'LVAutoSave*' -Recurse -ErrorAction SilentlyContinue |
                 Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
         }
-    Write-Host 'Keep-alive stopped; dependencies installed and verified.'
+    Write-Host "LabVIEW $year : dependencies installed and verified."
+}
+
+try {
+    # ---- Parse the dragon file (single source of truth for the dep list) -----
+    if (-not (Test-Path $dragon)) { throw "dragon file not found: $dragon" }
+    $deps = @()
+    $inDeps = $false
+    foreach ($line in (Get-Content $dragon)) {
+        if ($line -match '^\s*\[(.+)\]\s*$') { $inDeps = ($Matches[1] -eq 'vipm.dependencies'); continue }
+        if ($inDeps -and $line -match '^\s*([A-Za-z0-9_\-\.]+)\s*=') { $deps += $Matches[1] }
+    }
+    if ($deps.Count -eq 0) { throw "no [vipm.dependencies] entries found in $dragon" }
+    Write-Host "Dragon dependencies: $($deps -join ', ')"
+
+    # ---- Discover EVERY installed LabVIEW dev system -------------------------
+    $installed = @(Get-ChildItem $niDir -Directory -Filter 'LabVIEW *' -ErrorAction SilentlyContinue |
+        Where-Object { (Test-Path (Join-Path $_.FullName 'LabVIEW.exe')) -and ($_.Name -match 'LabVIEW (\d{4})$') } |
+        ForEach-Object { [int]($_.Name -replace 'LabVIEW ', '') } | Sort-Object)
+    if ($installed.Count -eq 0) { throw "no LabVIEW dev systems found under $niDir" }
+    Write-Host "Installing deps into ALL LabVIEW versions: $($installed -join ', ')"
+
+    # ---- Install into each version; record which succeeded -------------------
+    $built = @()
+    foreach ($year in $installed) {
+        Install-DepsForVersion -year $year -deps $deps
+        $built += $year
+    }
+
+    Set-Content -Path $targetsFile -Value ($built -join "`n") -Force
+    Write-Host ""
+    Write-Host "Dependency install complete for: $($built -join ', ')"
     exit 0
 }
 catch {

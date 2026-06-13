@@ -123,20 +123,44 @@ server.vi.callsEnabled=True
 ShowWelcomeOnLaunch=False
 ```
 
-### Building the spec
+### Building the spec — once PER LabVIEW version
+The pipeline installs the dragon deps into **every** LabVIEW dev system in the
+image and builds the spec with **each**, producing one output dir per version
+(`Build-2026\`, `Build-2024\`, …). Rationale: for an **EXE** the build version
+makes no difference, but for **lvlibs / packed project libraries** (e.g.
+**VeriStand custom devices for RT targets**) the saved LabVIEW version dictates
+downstream compatibility — users must download the artifact built with their
+exact LabVIEW version.
+
 ```powershell
-LabVIEWCLI -LogToConsole TRUE -OperationName ExecuteBuildSpec `
-  -ProjectPath C:\workspace\Source\Simple_Project.lvproj `
-  -BuildSpecName test_build `
-  -LabVIEWPath "C:\Program Files\National Instruments\LabVIEW 2026\LabVIEW.exe" `
-  -Headless
+foreach ($year in $installedVersions) {
+  Remove-Item C:\workspace\Build -Recurse -Force -ErrorAction SilentlyContinue
+  LabVIEWCLI -LogToConsole TRUE -OperationName ExecuteBuildSpec `
+    -ProjectPath C:\workspace\Source\Simple_Project.lvproj `
+    -BuildSpecName test_build `
+    -LabVIEWPath "C:\Program Files\National Instruments\LabVIEW $year\LabVIEW.exe" `
+    -Headless
+  Move-Item C:\workspace\Build "C:\workspace\Build-$year"   # one dir per version
+}
 ```
 - Pin with `-LabVIEWPath` (not `-LabVIEWVersion`).
-- A LabVIEW **2023** project builds fine under **2026** (auto-upgrade on load).
+- A LabVIEW **2023** project builds fine under newer LabVIEW (auto-upgrade on
+  load), so it builds under every version present.
 - `Bld_localDestDir=../Build` in the .lvproj resolves relative to `Source/` →
-  output lands at **repo-root `Build\Application.exe`**, not `Source\Build\`.
-- Kill the keep-alive LabVIEW and delete `LVAutoSave*` dirs before building,
-  or the build's LabVIEW may stall on an autorecover prompt.
+  each build lands at repo-root `Build\`; move it to `Build-<year>\` between
+  builds so versions don't overwrite each other.
+- Install deps into each version BEFORE building with it (deps are per-version
+  in VIPM). `container-install-deps.ps1` loops all versions; it records the
+  successfully-prepared versions to `C:\workspace\lv-targets.txt`, which
+  `container-build.ps1` reads.
+- Kill the keep-alive LabVIEW and delete `LVAutoSave*` dirs between versions,
+  or the next LabVIEW launch may stall on an autorecover prompt.
+- Artifact: upload `Build-*/**` as one archive; the user extracts the
+  `Build-<year>` folder matching their LabVIEW version.
+- NOTE: in the current NI image only **LabVIEW 2026** is a real dev system
+  (2023/2024/2025 dirs are stubs without `LabVIEW.exe`), so today this yields a
+  single `Build-2026`. When NI ships an image with multiple dev systems, the
+  same scripts automatically build one artifact per version — no changes needed.
 
 ### GitHub-runner Docker quirks
 - `windows-latest` intermittently boots with the Docker daemon **down**

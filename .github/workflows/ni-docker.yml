@@ -75,26 +75,34 @@ jobs:
           docker exec lv powershell -NoProfile -ExecutionPolicy Bypass -File C:\workspace\.github\scripts\container-install-deps.ps1
           if ($LASTEXITCODE -ne 0) { throw "dependency install failed: $LASTEXITCODE" }
 
-      - name: Build test_build (ExecuteBuildSpec)
-        timeout-minutes: 20
+      - name: Build test_build for every LabVIEW version (ExecuteBuildSpec)
+        timeout-minutes: 40
         shell: pwsh
         run: |
           docker exec lv powershell -NoProfile -ExecutionPolicy Bypass -File C:\workspace\.github\scripts\container-build.ps1
           if ($LASTEXITCODE -ne 0) { throw "container build failed: $LASTEXITCODE" }
 
-      - name: Verify build output on host
+      - name: Verify per-version build output on host
         shell: pwsh
         run: |
-          $exe = Join-Path $env:GITHUB_WORKSPACE 'Build\Application.exe'
-          if (-not (Test-Path $exe)) { throw "missing on host: $exe" }
-          if ((Get-Item $exe).Length -le 0) { throw "$exe is empty" }
-          Write-Host "Build output present: $exe ($((Get-Item $exe).Length) bytes)"
+          # container-build.ps1 writes one Build-<year>\ dir per LabVIEW version.
+          $dirs = Get-ChildItem $env:GITHUB_WORKSPACE -Directory -Filter 'Build-*'
+          if (-not $dirs) { throw "no Build-<year> output dirs found on host" }
+          foreach ($d in $dirs) {
+            $exe = Join-Path $d.FullName 'Application.exe'
+            if (-not (Test-Path $exe)) { throw "missing: $exe" }
+            if ((Get-Item $exe).Length -le 0) { throw "$exe is empty" }
+            Write-Host "Build output present: $exe ($((Get-Item $exe).Length) bytes)"
+          }
 
-      - name: Upload build artifact
+      - name: Upload per-version build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: test_build
-          path: Build/**
+          # One zip with a Build-<year>\ folder per LabVIEW version; download the
+          # folder matching your LabVIEW version (matters for lvlibs / packed
+          # libs, e.g. VeriStand custom devices for RT targets).
+          name: test_build-all-versions
+          path: Build-*/**
           if-no-files-found: error
 
       - name: Tear down container
